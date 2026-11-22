@@ -24,6 +24,8 @@ import {
   mountFrame,
   ordered as orderContributions,
   safeDispose,
+  testId,
+  TESTID,
   type App,
   type Contribution,
   type FabAction,
@@ -315,6 +317,7 @@ function windowIconButton(
   label: string,
 ): HTMLButtonElement {
   const node = button("ghost small", "", title);
+  node.dataset.testid = TESTID.windowTool;
   node.innerHTML = WINDOW_ICONS[iconName];
   node.dataset.windowTool = iconName;
   node.setAttribute("aria-label", label);
@@ -341,13 +344,23 @@ function status(kind: "ok" | "warn" | "offline", text: string): void {
 function renderSidebar(): void {
   views.replaceChildren();
   if (!surface) {
-    views.append(element("div", "placeholder", "Reading the composition…"));
+    views.append(
+      testId(
+        element("div", "placeholder", "Reading the composition…"),
+        TESTID.viewsPlaceholder,
+      ),
+    );
     return;
   }
 
   const groups = visibleGroups();
   if (groups.length === 0) {
-    views.append(element("div", "placeholder", "No app contributes a view."));
+    views.append(
+      testId(
+        element("div", "placeholder", "No app contributes a view."),
+        TESTID.viewsPlaceholder,
+      ),
+    );
     return;
   }
 
@@ -356,12 +369,17 @@ function renderSidebar(): void {
   for (const group of groups) {
     const parent = group.parent;
     const key = group.key;
-    const node = button(
-      "view-button",
-      "",
-      `${parent.slot.label} — ${parent.app.id}`,
+    const node = testId(
+      button(
+        "view-button",
+        "",
+        `${parent.slot.label} — ${parent.app.id}`,
+      ),
+      TESTID.viewItem,
     );
     node.dataset.key = key;
+    node.dataset.appId = parent.app.id;
+    node.dataset.tag = parent.slot.tag;
     if (group.children.some((child) => contributionKey(child) === activeKey)) {
       node.classList.add("active");
     }
@@ -393,11 +411,15 @@ function renderActions(): void {
   for (const contribution of ordered(ACTION).filter(
     (candidate) => implementedByPanel(candidate) && !candidate.slot.hidden,
   )) {
-    const node = button(
-      "action-button",
-      contribution.slot.label,
-      `${contribution.slot.label} — ${contribution.app.id}`,
+    const node = testId(
+      button(
+        "action-button",
+        contribution.slot.label,
+        `${contribution.slot.label} — ${contribution.app.id}`,
+      ),
+      TESTID.actionButton,
     );
+    node.dataset.appId = contribution.app.id;
     const badge = element("span", "action-icon", "⚡");
     node.prepend(badge);
     node.addEventListener("click", () => {
@@ -413,27 +435,38 @@ function renderWarnings(): void {
   if (!surface) return;
 
   if (surface.fatal) {
-    const node = element(
-      "div",
-      "warning fatal",
-      `The composition cannot boot: ${surface.fatal.message ?? "unknown error"}`,
+    const node = testId(
+      element(
+        "div",
+        "warning fatal",
+        `The composition cannot boot: ${surface.fatal.message ?? "unknown error"}`,
+      ),
+      TESTID.warning,
     );
+    node.dataset.kind = "fatal";
     warnings.append(node);
   }
   for (const degraded of surface.degraded) {
-    warnings.append(
+    const node = testId(
       element("div", "warning", `${degraded.app}: ${degraded.reason}`),
+      TESTID.warning,
     );
+    node.dataset.kind = "degraded";
+    node.dataset.appId = degraded.app;
+    warnings.append(node);
   }
   const ignored = sdkIgnored(surface.apps, implemented);
   if (ignored.length > 0) {
-    warnings.append(
+    const node = testId(
       element(
         "div",
         "warning muted-warning",
         `${ignored.length} contribution(s) target slots this panel does not implement.`,
       ),
+      TESTID.warning,
     );
+    node.dataset.kind = "ignored";
+    warnings.append(node);
   }
 }
 
@@ -444,25 +477,36 @@ function renderTabs(): void {
     const active = group.children.some(
       (child) => contributionKey(child) === activeKey,
     );
-    const node = element("div", "tab");
+    const node = testId(element("div", "tab"), TESTID.tab);
     node.dataset.key = group.key;
+    node.dataset.appId = group.parent.app.id;
+    node.dataset.tag = group.parent.slot.tag;
     node.setAttribute("role", "tab");
     if (active) {
       node.classList.add("active");
       node.setAttribute("aria-selected", "true");
     }
 
-    const select = button("tab-label", group.parent.slot.label);
+    const select = testId(
+      button("tab-label", group.parent.slot.label),
+      TESTID.tabSelect,
+    );
     select.title = group.parent.app.id;
     select.addEventListener("click", () => activateGroup(group));
 
-    const detach = button("tab-tool tab-float", "⇱", "Float the active view");
+    const detach = testId(
+      button("tab-tool tab-float", "⇱", "Float the active view"),
+      TESTID.tabFloat,
+    );
     detach.addEventListener("click", (event) => {
       event.stopPropagation();
       detachGroup(group);
     });
 
-    const close = button("tab-tool", "×", "Close this group");
+    const close = testId(
+      button("tab-tool", "×", "Close this group"),
+      TESTID.tabClose,
+    );
     close.addEventListener("click", (event) => {
       event.stopPropagation();
       void requestGroupClose(group);
@@ -492,7 +536,7 @@ async function mountInto(
   onParams?: (params: unknown) => void,
   onReady?: (frame: FrameHandle) => void,
 ): Promise<() => void> {
-  root.replaceChildren(element("div", "loading", "Loading module…"));
+  root.replaceChildren(testId(element("div", "loading", "Loading module…"), TESTID.loading));
   try {
     const response = await request(assetUrl(contribution), {
       headers: { accept: "text/javascript" },
@@ -690,18 +734,21 @@ function renderFab(
   originKey: string | null,
 ): HTMLElement {
   const actions = fab.slot.actions ?? [];
-  const wrap = element("div", "fab");
+  const wrap = testId(element("div", "fab"), TESTID.fab);
   wrap.dataset.tag = fab.slot.tag;
   if (actions.length <= 1) {
     const action = actions[0];
     if (action) {
-      const node = fabButton(
-        "fab-button",
-        action.label,
-        source.app.id,
-        action.icon ?? fab.slot.icon,
-        action.icon ? action.icon_sha256 : fab.slot.icon_sha256,
-        true,
+      const node = testId(
+        fabButton(
+          "fab-button",
+          action.label,
+          source.app.id,
+          action.icon ?? fab.slot.icon,
+          action.icon ? action.icon_sha256 : fab.slot.icon_sha256,
+          true,
+        ),
+        TESTID.fabButton,
       );
       node.addEventListener("click", () =>
         runFabAction(source, action, originKey, node),
@@ -711,31 +758,38 @@ function renderFab(
     return wrap;
   }
 
-  const menu = element("div", "fab-menu");
+  const menu = testId(element("div", "fab-menu"), TESTID.fabMenu);
   menu.hidden = true;
   menu.setAttribute("role", "menu");
   let trigger: HTMLElement | null = null;
   for (const action of actions) {
-    const item = fabButton(
-      "fab-menu-item",
-      action.label,
-      source.app.id,
-      action.icon,
-      action.icon_sha256,
+    const item = testId(
+      fabButton(
+        "fab-menu-item",
+        action.label,
+        source.app.id,
+        action.icon,
+        action.icon_sha256,
+      ),
+      TESTID.fabItem,
     );
+    item.dataset.tag = action.tag;
     item.setAttribute("role", "menuitem");
     item.addEventListener("click", () =>
       runFabAction(source, action, originKey, trigger ?? item),
     );
     menu.append(item);
   }
-  const main = fabButton(
-    "fab-button fab-multi",
-    fab.slot.label,
-    source.app.id,
-    fab.slot.icon,
-    fab.slot.icon_sha256,
-    true,
+  const main = testId(
+    fabButton(
+      "fab-button fab-multi",
+      fab.slot.label,
+      source.app.id,
+      fab.slot.icon,
+      fab.slot.icon_sha256,
+      true,
+    ),
+    TESTID.fabButton,
   );
   trigger = main;
   main.setAttribute("aria-haspopup", "menu");
@@ -852,7 +906,9 @@ function openModal(
 
   modalTitle.textContent = target.slot.label;
   modalApp.textContent = target.app.id;
-  modalBody.replaceChildren(element("div", "loading", "Loading modal…"));
+  modalBody.replaceChildren(
+    testId(element("div", "loading", "Loading modal…"), TESTID.loading),
+  );
   const mount: Mounted = {
     root: modalBody,
     contribution: target,
@@ -966,14 +1022,16 @@ function renderSubtabs(state: Mounted): void {
   if (!state.subtabs) {
     const pane = state.root.parentElement;
     if (!pane) return;
-    const bar = element("div", "pane-subtabs");
+    const bar = testId(element("div", "pane-subtabs"), TESTID.paneSubtabs);
     pane.insertBefore(bar, pane.firstChild);
     state.subtabs = bar;
   }
   state.subtabs.replaceChildren();
   for (const child of children) {
     const key = contributionKey(child);
-    const node = button("sub-tab", "", child.app.id);
+    const node = testId(button("sub-tab", "", child.app.id), TESTID.subTab);
+    node.dataset.key = key;
+    node.dataset.appId = child.app.id;
     const glyph = element("span", "sub-tab-icon");
     const appIcon = child.app.icon;
     renderIcon(glyph, {
@@ -1008,23 +1066,35 @@ function ensurePane(contribution: Contribution, params?: unknown): void {
     }
   }
 
-  const pane = element("section", "pane");
+  const pane = testId(element("section", "pane"), TESTID.pane);
   pane.dataset.key = key;
+  pane.dataset.appId = contribution.app.id;
+  pane.dataset.tag = contribution.slot.tag;
+  pane.dataset.active = "false";
 
-  const head = element("header", "pane-head");
+  const head = testId(element("header", "pane-head"), TESTID.paneHeader);
   const copy = element("div", "pane-copy");
   copy.append(
-    element("strong", "", contribution.slot.label),
-    element("span", "pane-app", contribution.app.id),
+    testId(
+      element("strong", "", contribution.slot.label),
+      TESTID.paneTitle,
+    ),
+    testId(element("span", "pane-app", contribution.app.id), TESTID.paneApp),
   );
-  const tools = element("div", "pane-tools");
-  const detach = button("ghost small", "Float", "Open this view in a floating window");
+  const tools = testId(element("div", "pane-tools"), TESTID.paneTools);
+  const detach = testId(
+    button("ghost small", "Float", "Open this view in a floating window"),
+    TESTID.paneFloat,
+  );
   detach.addEventListener("click", () => {
     const group = groupOf(contribution);
     if (group) detachGroup(group);
     else void detachTab(key);
   });
-  const close = button("ghost small", "Close", "Close this view group");
+  const close = testId(
+    button("ghost small", "Close", "Close this view group"),
+    TESTID.paneClose,
+  );
   close.addEventListener("click", () => {
     const group = groupOf(contribution);
     if (group) void requestGroupClose(group);
@@ -1033,7 +1103,7 @@ function ensurePane(contribution: Contribution, params?: unknown): void {
   tools.append(detach, close);
   head.append(copy, tools);
 
-  const body = element("div", "pane-body");
+  const body = testId(element("div", "pane-body"), TESTID.paneBody);
   pane.append(head, body);
   panes.append(pane);
 
@@ -1079,6 +1149,7 @@ function renderPanes(): void {
     if (!pane) continue;
     const visible = key === activeKey;
     pane.classList.toggle("active", visible);
+    pane.dataset.active = String(visible);
     if (state.visible === visible) continue;
     state.visible = visible;
     state.setVisible?.(visible);
@@ -1271,6 +1342,7 @@ function setMaximized(state: Floating, maximized: boolean): void {
     state.element.style.height = "auto";
     state.element.classList.add("maximized");
     state.mode = "maximized";
+    state.element.dataset.mode = "maximized";
     setMaximizeIcon(state.maximizeButton, true);
     focusWindow(state);
     return;
@@ -1285,6 +1357,7 @@ function setMaximized(state: Floating, maximized: boolean): void {
     state.element.style.height = state.bounds.height;
   }
   state.mode = "normal";
+  state.element.dataset.mode = "normal";
   setMaximizeIcon(state.maximizeButton, false);
 }
 
@@ -1293,16 +1366,20 @@ function minimizeWindow(state: Floating): void {
   state.restoreMode = minimizedFrom(state.mode);
   state.mode = "minimized";
   state.element.classList.add("minimized");
+  state.element.dataset.mode = "minimized";
 
-  const item = element("div", "stack-item");
-  const open = button("stack-open", "", "");
+  const item = testId(element("div", "stack-item"), TESTID.stackItem);
+  item.dataset.key = state.key;
+  item.dataset.appId = state.contribution.app.id;
+  item.dataset.tag = state.contribution.slot.tag;
+  const open = testId(button("stack-open", "", ""), TESTID.stackOpen);
   open.title = `Restore ${state.contribution.slot.label}`;
   open.append(
     element("span", "stack-label", state.contribution.slot.label),
     element("span", "stack-app", state.contribution.app.id),
   );
   open.addEventListener("click", () => restoreStack(state));
-  const close = button("stack-close", "×", "Close");
+  const close = testId(button("stack-close", "×", "Close"), TESTID.stackClose);
   close.addEventListener("click", (event) => {
     event.stopPropagation();
     void requestWindowClose(state);
@@ -1327,6 +1404,7 @@ function restoreStack(state: Floating): void {
     state.mode = "normal";
     setMaximizeIcon(state.maximizeButton, false);
   }
+  state.element.dataset.mode = state.mode;
   updateStack();
   focusWindow(state);
 }
@@ -1370,19 +1448,30 @@ function openWindow(
     Math.min(size?.height ?? 340, window.innerHeight - 24),
   );
   const offset = 74 + floating.size * 28;
-  const windowElement = element("section", "window");
+  const windowElement = testId(element("section", "window"), TESTID.window);
+  windowElement.dataset.key = key;
+  windowElement.dataset.kind = kind;
+  windowElement.dataset.appId = contribution.app.id;
+  windowElement.dataset.tag = contribution.slot.tag;
+  windowElement.dataset.mode = "normal";
   windowElement.style.width = `${width}px`;
   windowElement.style.height = `${height}px`;
   windowElement.style.left = `${Math.min(offset, window.innerWidth - width - 12)}px`;
   windowElement.style.top = `${Math.min(offset, window.innerHeight - height - 12)}px`;
 
-  const header = element("header", "window-head");
+  const header = testId(element("header", "window-head"), TESTID.windowHeader);
   const copy = element("div", "window-copy");
   copy.append(
-    element("strong", "", contribution.slot.label),
-    element("span", "window-app", contribution.app.id),
+    testId(
+      element("strong", "", contribution.slot.label),
+      TESTID.windowTitle,
+    ),
+    testId(
+      element("span", "window-app", contribution.app.id),
+      TESTID.windowApp,
+    ),
   );
-  const tools = element("div", "window-tools");
+  const tools = testId(element("div", "window-tools"), TESTID.windowTools);
   const dock = windowIconButton(
     "dock",
     "Dock this view back into the tabs",
@@ -1403,7 +1492,7 @@ function openWindow(
   tools.append(dock, minimize, maximize, close);
   header.append(copy, tools);
 
-  const body = element("div", "window-body");
+  const body = testId(element("div", "window-body"), TESTID.windowBody);
   const fabs = element("div", "fabs window-fabs");
   fabs.hidden = true;
   windowElement.append(header, body, fabs);
@@ -1518,12 +1607,20 @@ function renderSettings(): void {
   settingsBody.replaceChildren();
   if (contributions.length === 0) {
     settingsBody.append(
-      element("p", "placeholder", "No app contributes settings."),
+      testId(
+        element("p", "placeholder", "No app contributes settings."),
+        TESTID.settingsEmpty,
+      ),
     );
     return;
   }
   for (const contribution of contributions) {
-    const section = element("section", "settings-section");
+    const section = testId(
+      element("section", "settings-section"),
+      TESTID.settingsSection,
+    );
+    section.dataset.appId = contribution.app.id;
+    section.dataset.slot = contribution.slot.id;
     const head = element("header", "settings-section-head");
     head.append(
       element("strong", "", contribution.slot.label),
@@ -1703,7 +1800,9 @@ async function refresh(): Promise<void> {
       });
     }
     reconcile();
+    document.body.dataset.shellState = "ready";
   } catch (error) {
+    document.body.dataset.shellState = "offline";
     status(
       "offline",
       `engine unreachable — retrying (${error instanceof Error ? error.message : String(error)})`,

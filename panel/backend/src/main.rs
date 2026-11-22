@@ -277,13 +277,13 @@ async fn login_page() -> Response {
   <h1>Welcome back</h1>
   <p>Sign in as <code>operator</code> to open the workspace.</p>
 </div>
-<form id="login" class="form">
+<form id="login" class="form" data-testid="login-form">
   <label class="field">
     <span>Password</span>
-    <input id="password" type="password" autocomplete="current-password" placeholder="Operator password" autofocus required>
+    <input id="password" data-testid="login-password" type="password" autocomplete="current-password" placeholder="Operator password" autofocus required>
   </label>
-  <button class="primary" type="submit">Sign in</button>
-  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <button class="primary" type="submit" data-testid="login-submit">Sign in</button>
+  <p id="status" class="status" role="status" aria-live="polite" data-testid="login-status"></p>
 </form>
 <p class="hint">First boot? Read the password from <code>state/credentials.txt</code>.</p>
 <script>
@@ -318,17 +318,17 @@ async fn setup() -> Response {
   <h1>Set a new password</h1>
   <p>Replace the generated operator password before opening the workspace.</p>
 </div>
-<form id="setup" class="form">
+<form id="setup" class="form" data-testid="setup-form">
   <label class="field">
     <span>Current password</span>
-    <input id="current" type="password" autocomplete="current-password" placeholder="From state/credentials.txt" autofocus required>
+    <input id="current" data-testid="setup-current" type="password" autocomplete="current-password" placeholder="From state/credentials.txt" autofocus required>
   </label>
   <label class="field">
     <span>New password</span>
-    <input id="new" type="password" autocomplete="new-password" placeholder="At least 12 characters" minlength="12" required>
+    <input id="new" data-testid="setup-new" type="password" autocomplete="new-password" placeholder="At least 12 characters" minlength="12" required>
   </label>
-  <button class="primary" type="submit">Change password</button>
-  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <button class="primary" type="submit" data-testid="setup-submit">Change password</button>
+  <p id="status" class="status" role="status" aria-live="polite" data-testid="setup-status"></p>
 </form>
 <p class="hint">The current password is in <code>state/credentials.txt</code>. The engine refuses every other resource until it changes.</p>
 <script>

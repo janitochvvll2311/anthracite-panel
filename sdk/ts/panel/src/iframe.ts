@@ -7,6 +7,7 @@
 // `/api/apps/{id}/` prefix.
 
 import { isStreamingContentType } from "./stream";
+import { TESTID } from "./testids";
 
 export type FrameContext = {
   app: { id: string; version: string; risk: string };
@@ -134,6 +135,11 @@ export async function mountFrame(
   const allow = `/api/apps/${encodeURIComponent(options.context.app.id)}/`;
   const iframe = document.createElement("iframe");
   iframe.className = "app-frame";
+  iframe.dataset.testid = TESTID.appFrame;
+  iframe.dataset.app = options.context.app.id;
+  iframe.dataset.slot = options.context.contribution.id;
+  iframe.dataset.tag = options.context.contribution.tag;
+  iframe.dataset.kind = options.context.kind;
   iframe.setAttribute("sandbox", "allow-scripts allow-forms allow-downloads");
   iframe.setAttribute(
     "title",
@@ -285,6 +291,7 @@ export async function mountFrame(
       if (message.token !== token) return;
 
       if (message.type === "anth:mounted") {
+        iframe.dataset.state = "mounted";
         options.onReady?.({
           update,
           requestClose,
@@ -297,6 +304,7 @@ export async function mountFrame(
         return;
       }
       if (message.type === "anth:error") {
+        iframe.dataset.state = "error";
         finish(new Error(String(message.message ?? "the app module failed")));
         return;
       }

@@ -35,7 +35,7 @@ The platform is tested by *contract*, not by feature coverage.
   that lives outside `apps/`, signs it with its own key and drives a real panel
   through install, approval, composition, asset serving and a route call.
 
-Two rules for the suite:
+Rules for the suite:
 
 - **Assert outputs, never durations.** Fuel is per-instruction and portable
   between backends; the clock is not.
@@ -43,8 +43,14 @@ Two rules for the suite:
   test that passes locally and fails in CI.
 - **The backend is not a contract.** Nothing asserts Cranelift-specific
   behaviour. If the Pulley profile ever ships, the same suite must pass on it.
+- **E2E selects by test id through a page object.** A spec drives page objects
+  and component wrappers that hold the selectors; a selector is `data-testid`
+  plus the node's identity attribute (`data-app-id`, `data-tag`, `data-mode`),
+  never a CSS class or a label. The ids live in `sdk/ts/panel/src/testids.ts`,
+  so the shell, the sandboxed frame and the suite read one map, and a new UI
+  element gets its id in the same change as its test.
 
 e2e (browser) tests exercise the official panel and one contributed slot, not
-every feature.
+every feature; they live in [`tests/e2e`](../../tests/e2e/README.md).
 
 ---

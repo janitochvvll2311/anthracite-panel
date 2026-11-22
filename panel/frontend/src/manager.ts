@@ -4,6 +4,8 @@
 // and may only call their own `/api/apps/{id}/` prefix; managing the engine is
 // the host's job and uses the same session as the rest of the shell.
 
+import { TESTID } from "@anthracite/panel";
+
 import { authorityDiff, RISKS, type Risk } from "./authority";
 
 type AppView = {
@@ -172,7 +174,7 @@ export function mountManager(
         </div>
       </header>
       <div class="mgr-section-body">
-        <div data-apps></div>
+        <div data-apps data-testid="${TESTID.managerApps}"></div>
         <div class="mgr-approve" data-approve hidden></div>
         <div class="mgr-form">
           <input type="file" accept=".anth,application/zip" data-install-file />
@@ -191,7 +193,7 @@ export function mountManager(
         <span class="mgr-hint">saved now; running apps change on restart</span>
       </header>
       <div class="mgr-section-body">
-        <div class="mgr-compose" data-compose></div>
+        <div class="mgr-compose" data-compose data-testid="${TESTID.managerCompose}"></div>
         <div class="mgr-form">
           <button class="mgr-btn primary" type="button" data-save-compose>Save composition</button>
         </div>
@@ -206,14 +208,14 @@ export function mountManager(
         </div>
       </header>
       <div class="mgr-section-body">
-        <div data-audit></div>
+        <div data-audit data-testid="${TESTID.managerAudit}"></div>
         <div class="mgr-form" data-audit-more hidden>
           <button class="mgr-btn" type="button" data-audit-older>Load older</button>
         </div>
       </div>
     </section>
 
-    <p class="mgr-status" data-status role="status"></p>
+    <p class="mgr-status" data-status role="status" data-testid="${TESTID.managerStatus}"></p>
   `;
 
   const appsRoot = root.querySelector<HTMLElement>("[data-apps]")!;
@@ -270,6 +272,8 @@ export function mountManager(
       table.append(head);
       for (const app of apps) {
         const row = element("tr");
+        row.dataset.testid = TESTID.managerApp;
+        row.dataset.appId = app.id;
         const id = element("td", "mgr-app");
         id.dataset.label = "App";
         id.append(element("div", "mgr-mono", app.id));
@@ -520,6 +524,8 @@ export function mountManager(
     const current = composition.profile[0]?.apps ?? [];
     for (const app of apps) {
       const label = element("label");
+      label.dataset.testid = TESTID.managerComposeItem;
+      label.dataset.appId = app.id;
       const input = document.createElement("input");
       input.type = "checkbox";
       input.dataset.app = app.id;

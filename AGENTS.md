@@ -87,6 +87,10 @@ bun install && bun run build                            # from the repo root
 # the external-bundle acid test: build, sign, install, compose, serve, answer
 scripts/acid-test.sh
 
+# browser e2e against a running panel (tests/e2e/README.md)
+(cd tests/e2e && bun install)
+(cd tests/e2e && ANTH_PANEL_URL=http://127.0.0.1:5173 ANTH_PANEL_PASSWORD=... bun run test)
+
 # a release: compile the public key in, sign every app bundle (private key local)
 scripts/release.sh --key <private-key> [--out release]
 
