@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body data-drawer="closed">
-    <header id="topbar" class="topbar">
+    <header id="topbar" class="topbar" data-testid="topbar">
       <button
         id="nav-toggle"
         class="ghost icon nav-toggle"
@@ -17,22 +17,24 @@
         aria-label="Open navigation"
         aria-controls="sidebar"
         aria-expanded="false"
+        data-testid="nav-toggle"
       >
         <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>
       </button>
-      <div class="brand">
+      <div class="brand" data-testid="brand">
         <span class="brand-mark" aria-hidden="true"></span>
         <strong>Anthracite</strong>
       </div>
-      <span id="health" class="health" data-state="offline">connecting…</span>
+      <span id="health" class="health" data-state="offline" data-testid="health">connecting…</span>
       <div class="grow"></div>
-      <div id="actions" class="actions" aria-label="Actions"></div>
+      <div id="actions" class="actions" aria-label="Actions" data-testid="actions"></div>
       <button
         id="manager-button"
         class="ghost"
         type="button"
         aria-label="Manager"
         title="Installed apps and composition"
+        data-testid="manager-button"
       >
         <span class="ghost-icon" aria-hidden="true">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="4.2" height="4.2" rx="1"/><rect x="9.3" y="2.5" width="4.2" height="4.2" rx="1"/><rect x="2.5" y="9.3" width="4.2" height="4.2" rx="1"/><rect x="9.3" y="9.3" width="4.2" height="4.2" rx="1"/></svg>
@@ -44,6 +46,7 @@
         type="button"
         aria-label="Settings"
         title="Settings"
+        data-testid="settings-button"
       >
         <span aria-hidden="true">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 4h3.2M9.3 4h4.2M2.5 8h6.2M12.3 8h1.2M2.5 12h2.2M8.3 12h5.2"/><path d="M7.1 2.5v3M10.9 6.5v3M5.1 10.5v3"/></svg>
@@ -51,88 +54,88 @@
       </button>
     </header>
 
-    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden data-testid="drawer-backdrop"></div>
 
     <div class="layout">
-      <aside id="sidebar" class="sidebar">
+      <aside id="sidebar" class="sidebar" data-testid="sidebar">
         <div class="sidebar-head">
           <div class="sidebar-title">Workspace</div>
-          <button id="drawer-close" class="ghost small drawer-close" type="button">
+          <button id="drawer-close" class="ghost small drawer-close" type="button" data-testid="drawer-close">
             Close
           </button>
         </div>
-        <nav id="views" aria-label="Views"></nav>
-        <div id="warnings" class="warnings" aria-live="polite"></div>
-        <details id="developer" class="developer" open>
-          <summary>Developer</summary>
+        <nav id="views" aria-label="Views" data-testid="views"></nav>
+        <div id="warnings" class="warnings" aria-live="polite" data-testid="warnings"></div>
+        <details id="developer" class="developer" open data-testid="developer">
+          <summary data-testid="developer-toggle">Developer</summary>
           <div class="viewport-row">
             <label for="viewport-select">Viewport</label>
-            <select id="viewport-select" class="viewport-select" aria-label="Viewport mode">
+            <select id="viewport-select" class="viewport-select" aria-label="Viewport mode" data-testid="viewport-select">
               <option value="auto">Auto</option>
               <option value="desktop">Desktop</option>
               <option value="tablet">Tablet</option>
               <option value="mobile">Mobile</option>
             </select>
-            <span id="viewport-effective" class="muted"></span>
+            <span id="viewport-effective" class="muted" data-testid="viewport-effective"></span>
           </div>
         </details>
         <footer class="sidebar-foot">
           <span>Anthracite</span>
-          <span id="panel-version" class="muted">v0.5.0</span>
+          <span id="panel-version" class="muted" data-testid="panel-version">v0.5.0</span>
         </footer>
       </aside>
 
-      <main id="workspace" class="workspace">
-        <div id="tabs" class="tabs" role="tablist" aria-label="Open views"></div>
-        <div id="panes" class="panes">
-          <div id="empty" class="empty">
+      <main id="workspace" class="workspace" data-testid="workspace">
+        <div id="tabs" class="tabs" role="tablist" aria-label="Open views" data-testid="tabs"></div>
+        <div id="panes" class="panes" data-testid="panes">
+          <div id="empty" class="empty" data-testid="empty-state">
             <div class="empty-mark" aria-hidden="true"></div>
             <h2>Nothing open yet</h2>
             <p>Pick a view from the sidebar. Apps contribute the views; the panel owns the frame.</p>
           </div>
         </div>
-        <div id="fabs" class="fabs" aria-label="App actions" hidden></div>
+        <div id="fabs" class="fabs" aria-label="App actions" hidden data-testid="fabs"></div>
       </main>
     </div>
 
-    <div id="windows" class="windows"></div>
+    <div id="windows" class="windows" data-testid="windows"></div>
 
-    <div id="stack" class="stack" role="toolbar" aria-label="Minimized views" hidden></div>
+    <div id="stack" class="stack" role="toolbar" aria-label="Minimized views" hidden data-testid="stack"></div>
 
-    <dialog id="modal" class="modal" aria-labelledby="modal-title">
+    <dialog id="modal" class="modal" aria-labelledby="modal-title" data-testid="modal">
       <header class="modal-head">
         <div class="modal-copy">
-          <strong id="modal-title"></strong>
-          <span id="modal-app" class="modal-app"></span>
+          <strong id="modal-title" data-testid="modal-title"></strong>
+          <span id="modal-app" class="modal-app" data-testid="modal-app"></span>
         </div>
-        <button id="modal-close" class="ghost" type="button">Close</button>
+        <button id="modal-close" class="ghost" type="button" data-testid="modal-close">Close</button>
       </header>
-      <div id="modal-body" class="modal-body"></div>
+      <div id="modal-body" class="modal-body" data-testid="modal-body"></div>
     </dialog>
 
-    <div id="settings" class="settings hidden" role="dialog" aria-modal="true" aria-label="Settings">
+    <div id="settings" class="settings hidden" role="dialog" aria-modal="true" aria-label="Settings" data-testid="settings">
       <div class="settings-card">
         <header>
           <div>
             <strong>Settings</strong>
             <span class="muted">contributed by running apps</span>
           </div>
-          <button id="settings-close" class="ghost" type="button">Close</button>
+          <button id="settings-close" class="ghost" type="button" data-testid="settings-close">Close</button>
         </header>
-        <div id="settings-body"></div>
+        <div id="settings-body" data-testid="settings-body"></div>
       </div>
     </div>
 
-    <div id="manager" class="manager hidden" role="dialog" aria-modal="true" aria-label="Manager">
+    <div id="manager" class="manager hidden" role="dialog" aria-modal="true" aria-label="Manager" data-testid="manager">
       <div class="manager-card">
         <header>
           <div>
             <strong>Manager</strong>
             <span class="muted">installed apps, grants and composition</span>
           </div>
-          <button id="manager-close" class="ghost" type="button">Close</button>
+          <button id="manager-close" class="ghost" type="button" data-testid="manager-close">Close</button>
         </header>
-        <div id="manager-body" class="manager-body"></div>
+        <div id="manager-body" class="manager-body" data-testid="manager-body"></div>
       </div>
     </div>
 

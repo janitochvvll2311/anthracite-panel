@@ -1,0 +1,18 @@
+{
+  "name": "anth-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser e2e for the official panel: page objects over stable test ids",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "typecheck": "tsc --noEmit",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/node": "26.6.6",
+    "typescript": "5.9.3"
+  }
+}

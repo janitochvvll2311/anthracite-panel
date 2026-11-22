@@ -3,6 +3,7 @@
 
 import type { FrameContext } from "./iframe";
 import type { Contribution } from "./model";
+import { TESTID } from "./testids";
 
 export function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -55,6 +56,7 @@ export function errorCard(
   }: ErrorCardOptions = {},
 ): HTMLElement {
   const card = element("div", className);
+  card.dataset.testid = TESTID.errorCard;
   card.append(
     element("strong", "", title),
     element(detailTag, "", error instanceof Error ? error.message : String(error)),

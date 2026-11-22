@@ -256,9 +256,16 @@
                 },
               };
               dispose = await module.mount(document.body, context);
+              document.body.dataset.testid = "slot-root";
+              document.body.dataset.app = message.context.app.id;
+              document.body.dataset.slot = message.context.contribution.id;
+              document.body.dataset.tag = message.context.contribution.tag;
+              document.body.dataset.kind = message.context.kind;
+              document.body.dataset.state = "mounted";
               send("anth:mounted");
               report();
             } catch (error) {
+              document.body.dataset.state = "error";
               send("anth:error", {
                 message:
                   error instanceof Error ? error.message : String(error),

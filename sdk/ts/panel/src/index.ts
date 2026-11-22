@@ -6,6 +6,7 @@
 export * from "./iframe";
 export * from "./dom";
 export * from "./stream";
+export * from "./testids";
 
 import type { App, Contribution } from "./model";
 export type { App, Contribution, FabAction, Slot } from "./model";
