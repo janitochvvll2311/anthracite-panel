@@ -36,6 +36,9 @@ The panel must be running and **past first boot**: the first boot `/setup` page
 rotates the generated password, and the suite does not mutate credentials.
 
 ```bash
+# build the shell once: the debug panel reads panel/frontend/dist from disk
+(cd panel/frontend && bun install && bun run build)
+
 # somewhere: start a panel. The developer demo is the usual fixture:
 cargo run --manifest-path panel/backend/Cargo.toml -- \
     --config demo/config.toml --listen 127.0.0.1:5173
@@ -58,6 +61,13 @@ and pass that one: the suite does not rotate credentials.
 | `ANTH_PANEL_OPERATOR` | Operator name. Default `operator`. |
 | `ANTH_PANEL_PASSWORD` | Required. The operator password the panel accepts. |
 | `ANTH_CHROMIUM` | Chromium path. Default `/usr/bin/chromium` when present. |
+
+`bun install` does not download a browser. If the host has no system Chromium
+and `ANTH_CHROMIUM` is unset, install Playwright's once:
+
+```bash
+bunx playwright install chromium
+```
 
 ```bash
 bun run test:headed   # watch it

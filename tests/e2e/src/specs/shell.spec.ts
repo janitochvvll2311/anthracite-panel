@@ -25,7 +25,16 @@ test("opening a view docks its tab and mounts the slot", async ({ panel }) => {
 });
 
 test("closing the last tab returns the empty workspace", async ({ panel }) => {
+  // Drain whatever the panel opened by default first, then open a view and
+  // close it through the announced path: the assertions cannot pass on an
+  // already-empty workspace.
   await panel.tabs.closeAll();
+  await expect(panel.tabs.items()).toHaveCount(0);
+
+  const appId = await panel.openFirstView();
+  await expect(panel.tabs.tab(appId)).toHaveCount(1);
+
+  await panel.tabs.close(appId);
 
   await expect(panel.tabs.items()).toHaveCount(0);
   await expect(panel.panes.items()).toHaveCount(0);

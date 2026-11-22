@@ -1,11 +1,6 @@
-import { existsSync } from "node:fs";
-
 import { defineConfig, devices } from "@playwright/test";
 
-import { panelURL, STORAGE_STATE } from "./src/browser";
-
-const systemChromium = process.env.ANTH_CHROMIUM ?? "/usr/bin/chromium";
-const useSystemChromium = existsSync(systemChromium);
+import { browserLaunchOptions, panelURL, STORAGE_STATE } from "./src/browser";
 
 /// The suite runs against a live panel: `ANTH_PANEL_URL` names it and
 /// `ANTH_PANEL_PASSWORD` supplies the operator password. There is no web
@@ -31,14 +26,7 @@ export default defineConfig({
     navigationTimeout: 20_000,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
-    ...(useSystemChromium
-      ? {
-          launchOptions: {
-            executablePath: systemChromium,
-            args: ["--no-sandbox"],
-          },
-        }
-      : {}),
+    launchOptions: browserLaunchOptions(),
   },
   projects: [
     {

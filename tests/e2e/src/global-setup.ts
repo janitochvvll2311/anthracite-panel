@@ -18,7 +18,25 @@ export default async function globalSetup(): Promise<void> {
   try {
     const login = new LoginPage(page);
     await login.goto();
-    await login.signIn(credentials().password);
+    await login.submit(credentials().password);
+
+    // A refusal stays on the gate, and the gate's status is the only clue: turn
+    // the timeout into the actual cause instead of a bare TimeoutError.
+    try {
+      await page.waitForURL((url) => url.pathname !== "/login", {
+        timeout: 20_000,
+      });
+    } catch {
+      const state = await login.status.getAttribute("data-state");
+      if (state === "bad") {
+        throw new Error(
+          "the panel refused ANTH_PANEL_PASSWORD (see tests/e2e/README.md)",
+        );
+      }
+      throw new Error(
+        `the login gate did not open the shell (status: ${state ?? "unknown"})`,
+      );
+    }
 
     if (new URL(page.url()).pathname === "/setup") {
       throw new Error(

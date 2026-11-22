@@ -14,3 +14,15 @@ test("every test id is kebab-case", () => {
     expect(value).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
   }
 });
+
+// The frame is a static document served as-is, so it cannot import the map.
+// The suite waits on this id; compare the literal here so a rename fails in the
+// unit test instead of timing out in the browser.
+test("the frame applies the shared slotRoot id", async () => {
+  const frame = await Bun.file(
+    new URL("./app-frame.html", import.meta.url),
+  ).text();
+  expect(frame).toContain(
+    `document.body.dataset.testid = "${TESTID.slotRoot}"`,
+  );
+});
