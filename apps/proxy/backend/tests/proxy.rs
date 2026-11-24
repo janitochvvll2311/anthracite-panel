@@ -27,7 +27,7 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use tokio::net::{TcpListener, TcpStream};
 
 use proxy_service::admin::ADMIN;
-use proxy_service::config::{Config, Endpoints, Host, Listener, Route, Upstream};
+use proxy_service::config::{Config, Endpoints, Header, Host, Listener, Route, Upstream};
 use proxy_service::plane;
 use proxy_service::service::Service;
 
@@ -771,7 +771,7 @@ async fn a_host_with_a_certificate_redirects_plain_http() {
     let config = Config {
         version: 0,
         listeners: vec![
-            listener(&end.http, false, None),
+            listener(&end.http, false, Some("a")),
             listener(&end.https, true, Some("a")),
         ],
         upstreams: vec![upstream("a", format!("http://{up}"))],
@@ -807,5 +807,63 @@ async fn a_host_with_a_certificate_redirects_plain_http() {
     assert!(location.starts_with("https://a.test"), "{location}");
     assert!(location.ends_with("/x?y=1"), "{location}");
 
+    // An unknown Host is served by the default host, but the redirect must use
+    // the document's name, never echo the header (open redirect).
+    let forged = Request::builder()
+        .uri(format!("http://{address}/x"))
+        .header("host", "evil.example")
+        .body(Full::new(Bytes::new()))
+        .expect("request");
+    let response = client().request(forged).await.expect("response");
+    assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(location.starts_with("https://a.test"), "{location}");
+    assert!(!location.contains("evil.example"), "{location}");
+
     let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_applies_have_one_winner() {
+    let end = endpoints();
+    let a = text_upstream("A").await;
+    let base = plain_config(
+        &end,
+        vec![host("a", "a.test", "a", None)],
+        vec![upstream("a", format!("http://{a}"))],
+    );
+    let fixture = Fixture::start("apply-race", end, base).await;
+    let service = Arc::clone(&fixture.service);
+    let current = service.snapshot().config.clone();
+    assert_eq!(current.version, 1);
+
+    let mut handles = Vec::new();
+    for index in 0..2 {
+        let service = Arc::clone(&service);
+        let mut document = current.clone();
+        document.hosts[0].routes[0].headers = vec![Header {
+            name: "x-attempt".to_string(),
+            value: index.to_string(),
+        }];
+        handles.push(tokio::task::spawn_blocking(move || {
+            service.apply(document, 1)
+        }));
+    }
+    let mut applied = 0;
+    let mut conflicts = 0;
+    for handle in handles {
+        match handle.await.expect("join") {
+            Ok(_) => applied += 1,
+            Err(error) => {
+                assert_eq!(error.kind(), ErrorKind::Conflict, "{error:?}");
+                conflicts += 1;
+            }
+        }
+    }
+    assert_eq!((applied, conflicts), (1, 1));
+    assert_eq!(service.status().version, 2);
 }

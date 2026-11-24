@@ -2,7 +2,7 @@
 #
 # Run the panel from the repository root:
 #
-#   scripts/dev.sh          # dev server on 0.0.0.0:5173
+#   scripts/dev.sh          # dev server on 127.0.0.1:5173
 #   cargo run -p anth-panel-backend -- --config demo/config.toml --listen 127.0.0.1:5173
 #
 # Relative paths resolve from the working directory, so start it from the root.

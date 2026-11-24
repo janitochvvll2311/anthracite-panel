@@ -30,3 +30,14 @@ test("the drawer closes from its own control", async ({ panel }) => {
   await panel.viewport.drawerClose.click();
   await panel.viewport.expectDrawer(false);
 });
+
+test("the panel viewport mode reaches the app frame", async ({ panel }) => {
+  const appId = await panel.openFirstView();
+  const slot = panel.activeSlot();
+  await slot.waitUntilMounted({ app: appId });
+
+  for (const mode of ["tablet", "mobile", "desktop"] as const) {
+    await panel.viewport.use(mode);
+    await expect(slot.html).toHaveAttribute("data-viewport", mode);
+  }
+});

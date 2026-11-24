@@ -55,23 +55,24 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
 
   const box = document.createElement("div");
   box.className = "px";
+  box.dataset.testid = "proxy-view";
   box.innerHTML = `
     <div class="px-bar">
       <div class="px-tabs" role="tablist">
-        <button type="button" role="tab" data-section="listeners">Listeners</button>
-        <button type="button" role="tab" data-section="hosts">Hosts &amp; routes</button>
-        <button type="button" role="tab" data-section="upstreams">Upstreams</button>
-        <button type="button" role="tab" data-section="log">Access log</button>
+        <button type="button" role="tab" data-section="listeners" data-testid="proxy-tab-listeners">Listeners</button>
+        <button type="button" role="tab" data-section="hosts" data-testid="proxy-tab-hosts">Hosts &amp; routes</button>
+        <button type="button" role="tab" data-section="upstreams" data-testid="proxy-tab-upstreams">Upstreams</button>
+        <button type="button" role="tab" data-section="log" data-testid="proxy-tab-log">Access log</button>
       </div>
       <span class="grow"></span>
       <span class="px-badge" data-running>—</span>
-      <button type="button" data-reload-certs title="Re-read the published certificates">Reload certs</button>
-      <button type="button" data-refresh>Refresh</button>
-      <button type="button" class="primary" data-apply>Apply</button>
+      <button type="button" data-reload-certs data-testid="proxy-reload-certs" title="Re-read the published certificates">Reload certs</button>
+      <button type="button" data-refresh data-testid="proxy-refresh">Refresh</button>
+      <button type="button" class="primary" data-apply data-testid="proxy-apply">Apply</button>
     </div>
-    <div class="px-banner" data-banner hidden></div>
-    <div class="px-section" data-body></div>
-    <p class="px-status" role="status" data-status></p>
+    <div class="px-banner" data-banner data-testid="proxy-banner" hidden></div>
+    <div class="px-section" data-body data-testid="proxy-body"></div>
+    <p class="px-status" role="status" data-status data-testid="proxy-status"></p>
   `;
   root.append(box);
 
@@ -292,18 +293,18 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
             ),
           )
           .join("");
-        return `<div class="px-grid hosts">
-          <span class="px-mono">${escape(listener.id)}</span>
-          <span class="px-mono">${escape(listener.bind)}</span>
-          <span>${listener.tls ? "TLS" : "HTTP"}</span>
-          <select data-default-host="${index}">
+        return `<div class="px-grid hosts" data-testid="proxy-listener" data-listener-id="${escape(listener.id)}">
+          <span class="px-field"><span class="px-field-name">Id</span><span class="px-mono">${escape(listener.id)}</span></span>
+          <span class="px-field"><span class="px-field-name">Bind</span><span class="px-mono">${escape(listener.bind)}</span></span>
+          <span class="px-field"><span class="px-field-name">Kind</span><span>${listener.tls ? "TLS" : "HTTP"}</span></span>
+          <span class="px-field"><span class="px-field-name">Default host</span><select data-default-host="${index}">
             ${option("", "(none)", listener["default-host"] === null)}
             ${hosts}
-          </select>
-          <label class="px-check"><input type="checkbox" data-forwarded="${index}"${
+          </select></span>
+          <span class="px-field"><span class="px-field-name">Trust</span><label class="px-check"><input type="checkbox" data-forwarded="${index}"${
             listener.forwarded ? " checked" : ""
-          } /> forwarded</label>
-          <span></span>
+          } /> forwarded</label></span>
+          <span class="px-field"></span>
         </div>`;
       })
       .join("");
@@ -336,18 +337,18 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
     if (!document) return;
     const rows = document.upstreams
       .map(
-        (upstream, index) => `<div class="px-grid">
-          <span class="px-mono">${escape(upstream.id)}</span>
-          <input type="text" data-upstream-url="${index}" value="${escape(upstream.url)}" />
-          <input type="number" min="1" max="300000" data-upstream-connect="${index}" value="${upstream["connect-timeout-ms"]}" />
-          <input type="number" min="1" max="300000" data-upstream-read="${index}" value="${upstream["read-timeout-ms"]}" />
-          <label class="px-check"><input type="checkbox" data-upstream-verify="${index}"${
+        (upstream, index) => `<div class="px-grid" data-testid="proxy-upstream" data-upstream-id="${escape(upstream.id)}">
+          <span class="px-field"><span class="px-field-name">Id</span><span class="px-mono">${escape(upstream.id)}</span></span>
+          <span class="px-field"><span class="px-field-name">URL</span><input type="text" data-upstream-url="${index}" value="${escape(upstream.url)}" /></span>
+          <span class="px-field"><span class="px-field-name">Connect ms</span><input type="number" min="1" max="300000" data-upstream-connect="${index}" value="${upstream["connect-timeout-ms"]}" /></span>
+          <span class="px-field"><span class="px-field-name">Read ms</span><input type="number" min="1" max="300000" data-upstream-read="${index}" value="${upstream["read-timeout-ms"]}" /></span>
+          <span class="px-field"><span class="px-field-name">TLS</span><label class="px-check"><input type="checkbox" data-upstream-verify="${index}"${
             upstream["tls-verify"] ? " checked" : ""
-          } /> verify</label>
-          <span>
+          } /> verify</label></span>
+          <span class="px-field"><span class="px-field-name">Actions</span><span class="px-actions">
             <button type="button" data-test-upstream="${escape(upstream.id)}">Test</button>
             <button type="button" class="danger" data-remove-upstream="${index}">Remove</button>
-          </span>
+          </span></span>
         </div>`,
       )
       .join("");
@@ -431,18 +432,18 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
         ].join("");
         const routes = host.routes
           .map(
-            (route, routeIndex) => `<div class="px-grid hosts">
-              <span class="px-mono">${escape(route.match)}</span>
-              <span class="px-mono">${escape(
+            (route, routeIndex) => `<div class="px-grid hosts" data-testid="proxy-route" data-route-id="${escape(route.id)}">
+              <span class="px-field"><span class="px-field-name">Match</span><span class="px-mono">${escape(route.match)}</span></span>
+              <span class="px-field"><span class="px-field-name">Target</span><span class="px-mono">${escape(
                 route.redirect ? `→ ${route.redirect}` : route.upstream ?? "—",
-              )}</span>
-              <span>${route["strip-prefix"] ? "strip" : ""}${
+              )}</span></span>
+              <span class="px-field"><span class="px-field-name">Flags</span><span>${route["strip-prefix"] ? "strip" : ""}${
                 route.websocket ? " ws" : ""
-              }</span>
-              <span>${route["body-limit"] ?? ""}</span>
-              <span></span>
-              <span><button type="button" class="danger" data-remove-route="${index}:${routeIndex}">Remove</button></span>
-              <span></span>
+              }</span></span>
+              <span class="px-field"><span class="px-field-name">Limit</span><span>${route["body-limit"] ?? ""}</span></span>
+              <span class="px-field"></span>
+              <span class="px-field"><span class="px-field-name">Actions</span><button type="button" class="danger" data-remove-route="${index}:${routeIndex}">Remove</button></span>
+              <span class="px-field"></span>
             </div>`,
           )
           .join("");
@@ -452,26 +453,26 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
             option(upstream.id, upstream.id, false),
           ),
         ].join("");
-        return `<div class="px-card">
+        return `<div class="px-card" data-testid="proxy-host" data-host-id="${escape(host.id)}">
           <div class="px-card-head">
             <strong>${escape(host.id)}</strong>
             <span class="grow"></span>
             <button type="button" class="danger" data-remove-host="${index}">Remove host</button>
           </div>
           <div class="px-grid hosts">
-            <span class="px-mono">names</span>
-            <input type="text" data-host-names="${index}" value="${escape(host.names.join(", "))}" />
-            <select data-host-certificate="${index}">${options}</select>
-            <label class="px-check"><input type="checkbox" data-host-acme="${index}"${
+            <span class="px-field"><span class="px-field-name">Names</span><input type="text" data-host-names="${index}" value="${escape(host.names.join(", "))}" /></span>
+            <span class="px-field"><span class="px-field-name">Certificate</span><select data-host-certificate="${index}">${options}</select></span>
+            <span class="px-field"><span class="px-field-name">ACME</span><label class="px-check"><input type="checkbox" data-host-acme="${index}"${
               host.acme ? " checked" : ""
-            } /> acme</label>
-            <label class="px-check"><input type="checkbox" data-host-redirect="${index}"${
+            } /> acme</label></span>
+            <span class="px-field"><span class="px-field-name">HTTPS</span><label class="px-check"><input type="checkbox" data-host-redirect="${index}"${
               host["redirect-https"] ? " checked" : ""
-            } /> https</label>
-            <label class="px-check"><input type="checkbox" data-host-hsts="${index}"${
+            } /> redirect</label></span>
+            <span class="px-field"><span class="px-field-name">HSTS</span><label class="px-check"><input type="checkbox" data-host-hsts="${index}"${
               host.hsts ? " checked" : ""
-            } /> hsts</label>
-            <span></span>
+            } /> hsts</label></span>
+            <span class="px-field"></span>
+            <span class="px-field"></span>
           </div>
           <div class="px-grid hosts head"><span>Match</span><span>Target</span><span>Flags</span><span>Limit</span><span></span><span></span><span></span></div>
           ${routes || `<div class="px-empty">No route on this host.</div>`}
@@ -487,7 +488,7 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
         </div>`;
       })
       .join("");
-    body.innerHTML = `<div class="px-bar"><span class="px-note">A host is one certificate and one route table; an unmatched name goes to the listener default.</span><span class="grow"></span><button type="button" data-add-host>Add host</button></div>
+    body.innerHTML = `<div class="px-bar"><span class="px-note">A host is one certificate and one route table; an unmatched name goes to the listener default.</span><span class="grow"></span><button type="button" data-add-host data-testid="proxy-add-host">Add host</button></div>
       ${cards || `<div class="px-empty">No host in the document.</div>`}`;
 
     body
@@ -567,7 +568,7 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
 
   function renderLogs(): void {
     body.innerHTML = `<div class="px-bar"><span class="px-note">One event per request; the stream drops under budget and reports the count.</span><span class="grow"></span><span class="px-badge" data-log-count>${events.length} events</span><span class="px-badge">dropped ${status?.dropped ?? 0}</span><button type="button" data-clear-log>Clear</button></div>
-      <div class="px-log" data-log>${events.map(eventRow).join("")}</div>`;
+      <div class="px-log" data-log data-testid="proxy-log">${events.map(eventRow).join("")}</div>`;
     body.querySelector("[data-clear-log]")?.addEventListener("click", () => {
       events = [];
       render();
@@ -627,7 +628,13 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
     if (section === "log") startLogs();
     else void refreshStatus();
   });
-  void load();
+  // A modal hands the host through `openView` params. When the view was not
+  // mounted, the panel opens it with those params instead of calling onParams;
+  // read them after the document loads so the draft exists.
+  const initial = (context.params as { addHost?: ProxyHost } | undefined)?.addHost;
+  void load().then(() => {
+    if (!disposed && initial) receiveHost(initial);
+  });
 
   return () => {
     disposed = true;

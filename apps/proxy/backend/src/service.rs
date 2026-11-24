@@ -142,6 +142,10 @@ pub struct Status {
     pub version: u64,
 }
 
+/// Concurrent connections a listener keeps alive; further accepts wait in the
+/// kernel backlog instead of spawning unbounded tasks.
+pub const MAX_CONNECTIONS: usize = 1024;
+
 pub struct Service {
     pub data: PathBuf,
     pub acme_root: PathBuf,
@@ -149,6 +153,11 @@ pub struct Service {
     pub endpoints: Endpoints,
     pub store: CertStore,
     pub logs: LogHub,
+    /// Serializes `apply` and certificate reloads: the version check, the
+    /// persist and the swap are one critical section.
+    write: Mutex<()>,
+    /// One permit per live connection across both listeners.
+    pub permits: Arc<tokio::sync::Semaphore>,
     snapshot: RwLock<Arc<Snapshot>>,
     status: Mutex<Status>,
     bound: RwLock<Vec<(String, String)>>,
@@ -172,6 +181,8 @@ impl Service {
             endpoints,
             store,
             logs: LogHub::new(1024),
+            write: Mutex::new(()),
+            permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS)),
             snapshot: RwLock::new(Arc::new(Snapshot {
                 config: Config::default(),
                 plan: Plan::build(&Config::default()),
@@ -307,6 +318,7 @@ impl Service {
     /// Compares the expected version, validates the whole document, persists it
     /// and swaps. Nothing is swapped when any step fails.
     pub fn apply(&self, config: Config, expected: u64) -> Result<Config, Error> {
+        let _serial = self.write.lock().expect("proxy write");
         let current = self.snapshot();
         if expected != current.config.version {
             return Err(Error::conflict(format!(
@@ -335,6 +347,7 @@ impl Service {
     /// Re-reads the published directory. An invalid file keeps the last good
     /// resolver and is reported; it never half-applies.
     pub fn reload_certificates(&self) -> Result<(), String> {
+        let _serial = self.write.lock().expect("proxy write");
         let current = self.snapshot();
         let Some(listener) = tls_listener(&current.config) else {
             self.note_reload(current.config.version);

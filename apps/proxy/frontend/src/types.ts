@@ -7,6 +7,8 @@ export type Caller = {
 export type FrameContext = Caller & {
   fill?: () => void;
   panel?: { slots: string[] };
+  /// Parameters the panel passed when it opened this view (a modal handoff).
+  params?: unknown;
   onVisibility?: (handler: (visible: boolean) => void) => () => void;
   onAction?: (handler: (tag: string, payload?: unknown) => void) => () => void;
   openModal?: (request: { tag: string; params?: unknown }) => Promise<boolean>;

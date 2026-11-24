@@ -38,12 +38,13 @@ packages it for a machine that should show its own host facts.
 From the repository root:
 
 ```bash
-# Either the script (0.0.0.0:5173 so a preview proxy can reach it):
+# The script serves 127.0.0.1:5173; set ANTH_DEV_LISTEN=0.0.0.0:5173 when a
+# preview proxy has to reach it (that is the explicit --allow-remote case).
 scripts/dev.sh
 
 # or explicitly:
 cargo run --manifest-path panel/backend/Cargo.toml -- \
-    --config demo/config.toml --listen 0.0.0.0:5173 --allow-remote
+    --config demo/config.toml --listen 127.0.0.1:5173
 ```
 
 The dev server listens on **5173**; the release variants use 8090/8091.

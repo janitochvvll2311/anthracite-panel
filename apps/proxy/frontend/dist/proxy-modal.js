@@ -24,7 +24,13 @@ async function call(context, path, init = {}) {
 
 // src/styles.ts
 var styles = `
-  .px { display: flex; flex-direction: column; gap: 14px; }
+  .px { display: flex; flex-direction: column; gap: 14px; max-width: 100%; container-type: inline-size; }
+  .px-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .px-field-name {
+    display: none; font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+    color: #7a8497;
+  }
+  .px-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .px-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .px-tabs { display: flex; gap: 4px; }
   .px-tabs button {
@@ -91,6 +97,58 @@ var styles = `
   .px-badge.ok { border-color: #2f5a3f; color: #93d9ab; }
   .px-badge.bad { border-color: #5c2b31; color: #ffb3ba; }
   .px-empty { padding: 10px; color: #7a8497; font-size: 12px; }
+  .px-card { min-width: 0; }
+
+  /* The panel's explicit developer modes reach the frame as
+     html[data-viewport], so the view adapts even when the iframe stays wide
+     on a desktop browser. */
+  html[data-viewport="tablet"] .px-grid,
+  html[data-viewport="tablet"] .px-grid.hosts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html[data-viewport="tablet"] .px-grid.head { display: none; }
+  html[data-viewport="tablet"] .px-field-name { display: block; }
+  html[data-viewport="tablet"] .px-card-head { flex-wrap: wrap; }
+  html[data-viewport="tablet"] .px-event { grid-template-columns: 60px 1fr 60px 60px; }
+  html[data-viewport="tablet"] .px-event > :nth-child(3),
+  html[data-viewport="tablet"] .px-event > :nth-child(6),
+  html[data-viewport="tablet"] .px-event > :nth-child(7) { display: none; }
+
+  html[data-viewport="mobile"] .px-grid,
+  html[data-viewport="mobile"] .px-grid.hosts { grid-template-columns: minmax(0, 1fr); }
+  html[data-viewport="mobile"] .px-grid.head { display: none; }
+  html[data-viewport="mobile"] .px-field-name { display: block; }
+  html[data-viewport="mobile"] .px-card-head { flex-wrap: wrap; }
+  html[data-viewport="mobile"] .px-event { grid-template-columns: 58px 1fr 52px; }
+  html[data-viewport="mobile"] .px-event > :nth-child(2) { display: none; }
+  html[data-viewport="mobile"] .px-form input[type="text"],
+  html[data-viewport="mobile"] .px-form input[type="number"],
+  html[data-viewport="mobile"] .px-form select { flex: 1 1 100%; }
+  html[data-viewport="mobile"] .px-form button { width: 100%; }
+  html[data-viewport="mobile"] .px-actions { width: 100%; }
+
+  /* The view is responsive to the frame width, which is what the panel's
+     desktop/tablet/mobile modes change. Containers, not the page width: the
+     app lives in an iframe. */
+  @container (max-width: 980px) {
+    .px-grid, .px-grid.hosts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .px-grid.head { display: none; }
+    .px-field-name { display: block; }
+    .px-card-head { flex-wrap: wrap; }
+    .px-event { grid-template-columns: 60px 1fr 60px 60px; }
+    .px-event > :nth-child(3),
+    .px-event > :nth-child(6),
+    .px-event > :nth-child(7) { display: none; }
+  }
+
+  @container (max-width: 640px) {
+    .px-grid, .px-grid.hosts { grid-template-columns: minmax(0, 1fr); }
+    .px-event { grid-template-columns: 58px 1fr 52px; }
+    .px-event > :nth-child(2) { display: none; }
+    .px-form input[type="text"],
+    .px-form input[type="number"],
+    .px-form select { flex: 1 1 100%; }
+    .px-form button { width: 100%; }
+    .px-actions { width: 100%; }
+  }
 `;
 
 // src/modal.ts

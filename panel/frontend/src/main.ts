@@ -92,6 +92,8 @@ type Mounted = {
   snapshot?: () => Promise<unknown>;
   /// Pauses app polling while the pane is not the active tab.
   setVisible?: (visible: boolean) => void;
+  /// Tells the module the panel's explicit layout mode.
+  setViewport?: (viewport: string) => void;
   /// Delivers a local action tag, with an optional file payload.
   action?: (tag: string, payload?: unknown) => void;
   /// Restores the view's last focused control.
@@ -261,6 +263,16 @@ function applyViewport(): void {
   } else {
     sidebar.inert = !drawerOpen;
   }
+  pushViewport(effective);
+}
+
+/// The explicit mode goes to every live frame, so an app adapts to the
+/// developer selector even when its iframe is still wide.
+function pushViewport(viewport: ResolvedViewport): void {
+  for (const state of mounted.values()) state.setViewport?.(viewport);
+  for (const state of floating.values()) state.setViewport?.(viewport);
+  for (const state of settingsMounted) state.setViewport?.(viewport);
+  modalState?.mount.setViewport?.(viewport);
 }
 
 const ordered = (slot: string): Contribution[] =>
@@ -552,6 +564,7 @@ async function mountInto(
         {
           slots: implemented,
           version: panelVersion,
+          viewport: effectiveViewport,
         },
         params,
       ),
@@ -614,12 +627,14 @@ function trackMount(
       state.requestClose = frame.requestClose;
       state.snapshot = frame.snapshot;
       state.setVisible = frame.setVisible;
+      state.setViewport = frame.setViewport;
       state.action = frame.action;
       state.focus = frame.focus;
       const pane = state.root.closest(".pane");
       const visible = !pane || pane.classList.contains("active");
       state.visible = visible;
       frame.setVisible(visible);
+      frame.setViewport(effectiveViewport);
     },
   ).then((dispose) => {
     if (state.cancelled || current() !== state) {

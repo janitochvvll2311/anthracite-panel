@@ -30,6 +30,10 @@ to `.auth/operator.json` and exposes `panel` (already reconciled) and `login`
 (the public gate). `auth.spec.ts` opts out of the stored session with
 `test.use({ storageState: { cookies: [], origins: [] } })`.
 
+`proxy.spec.ts` runs only when the composition carries `org.anthracite.proxy`
+(the standard demo does not until the v0.7 release wiring) and is skipped with
+a message otherwise.
+
 ## Run it
 
 The panel must be running and **past first boot**: the first boot `/setup` page

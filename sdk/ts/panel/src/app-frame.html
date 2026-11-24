@@ -255,6 +255,8 @@
                   return () => visibilityHandlers.delete(handler);
                 },
               };
+              document.documentElement.dataset.viewport =
+                message.context.panel?.viewport ?? "desktop";
               dispose = await module.mount(document.body, context);
               document.body.dataset.testid = "slot-root";
               document.body.dataset.app = message.context.app.id;
@@ -262,6 +264,8 @@
               document.body.dataset.tag = message.context.contribution.tag;
               document.body.dataset.kind = message.context.kind;
               document.body.dataset.state = "mounted";
+              document.documentElement.dataset.viewport =
+                message.context.panel?.viewport ?? "desktop";
               send("anth:mounted");
               report();
             } catch (error) {
@@ -271,6 +275,9 @@
                   error instanceof Error ? error.message : String(error),
               });
             }
+          } else if (message.type === "anth:viewport") {
+            document.documentElement.dataset.viewport =
+              message.viewport || "desktop";
           } else if (message.type === "anth:visibility") {
             for (const handler of visibilityHandlers) {
               handler(message.visible === true);

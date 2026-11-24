@@ -39,6 +39,9 @@ pub type ProxyBody = UnsyncBoxBody<Bytes, BoxError>;
 
 const ACME_PREFIX: &str = "/.well-known/acme-challenge/";
 const HSTS: &str = "max-age=31536000";
+/// A client that opens TCP and never finishes the handshake must not hold a
+/// permit forever.
+const TLS_HANDSHAKE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A body with no error case, boxed.
 pub fn empty() -> ProxyBody {
@@ -100,15 +103,23 @@ async fn accept(service: Arc<Service>, bind: String, tls: bool, listener: TcpLis
                 continue;
             }
         };
+        let permit = match service.permits.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => continue,
+        };
         let service = Arc::clone(&service);
         let bind = bind.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             if tls {
                 let config = service.snapshot().tls.clone();
                 let Some(config) = config else {
                     return;
                 };
-                if let Ok(stream) = TlsAcceptor::from(config).accept(stream).await {
+                let accepted =
+                    tokio::time::timeout(TLS_HANDSHAKE, TlsAcceptor::from(config).accept(stream))
+                        .await;
+                if let Ok(Ok(stream)) = accepted {
                     serve(service, bind, peer, true, stream).await;
                 }
             } else {
@@ -216,7 +227,14 @@ async fn handle(
 
     if !listener.tls && host.redirect_https && host.has_certificate {
         if let Some(port) = plan.https_port {
-            let location = redirect_target(&host_name, port, &request);
+            // The header may be an unknown name served by the default host; a
+            // redirect must not echo it or it becomes an open redirect.
+            let target = if host.names.iter().any(|name| name == &host_name) {
+                host_name.clone()
+            } else {
+                host.names.first().cloned().unwrap_or_default()
+            };
+            let location = redirect_target(&target, port, &request);
             let response = Response::builder()
                 .status(StatusCode::PERMANENT_REDIRECT)
                 .header(LOCATION, location)

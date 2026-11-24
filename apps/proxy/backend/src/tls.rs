@@ -169,12 +169,13 @@ impl SniResolver {
     }
 
     /// The selection rule, exposed so a unit test does not need a ClientHello.
+    /// Without a default host an unknown or absent SNI returns `None`, which
+    /// fails the handshake: never a certificate that does not match.
     pub fn select(&self, server_name: Option<&str>) -> Option<Arc<CertifiedKey>> {
         server_name
             .map(|name| name.trim_end_matches('.').to_ascii_lowercase())
             .and_then(|name| self.by_name.get(&name).cloned())
             .or_else(|| self.default.clone())
-            .or_else(|| self.by_name.values().next().cloned())
     }
 }
 
@@ -359,6 +360,18 @@ mod tests {
         assert!(!Arc::ptr_eq(&one, &two));
         let default = resolver.select(None).expect("no SNI default");
         assert!(Arc::ptr_eq(&two, &default));
+
+        let strict = Listener {
+            id: "strict".to_string(),
+            bind: ":8443".to_string(),
+            tls: true,
+            default_host: None,
+            forwarded: false,
+        };
+        let resolver = SniResolver::build(&strict, &config, &store).expect("resolver");
+        assert!(resolver.select(Some("unknown.test")).is_none());
+        assert!(resolver.select(None).is_none());
+        assert!(resolver.select(Some("one.test")).is_some());
         fs::remove_dir_all(dir).expect("cleanup");
     }
 
