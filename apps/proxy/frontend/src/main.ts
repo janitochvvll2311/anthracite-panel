@@ -1,4 +1,5 @@
 import { applyBody, call, watchLogs } from "./api";
+import { upsertHost, upsertUpstream } from "./state";
 import { styles } from "./styles";
 import type {
   AccessEvent,
@@ -86,6 +87,13 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   `;
   root.append(box);
 
+  const applyButton = box.querySelector("[data-apply]") as HTMLButtonElement;
+  applyButton.disabled = !canEdit;
+  if (!canEdit) {
+    applyButton.title =
+      "This panel has no modal slot; the document is read-only here.";
+  }
+
   const body = box.querySelector("[data-body]") as HTMLElement;
   const banner = box.querySelector("[data-banner]") as HTMLElement;
   const statusLine = box.querySelector("[data-status]") as HTMLElement;
@@ -164,6 +172,13 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   }
 
   async function apply(): Promise<void> {
+    if (!canEdit) {
+      setStatus(
+        "This panel has no modal slot; the document is read-only here.",
+        true,
+      );
+      return;
+    }
     const document = requireDraft();
     if (!document || !config) return;
     setStatus("Validating and applying the whole document…");
@@ -356,10 +371,10 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
             <button type="button" data-test-upstream="${escape(upstream.id)}" data-testid="proxy-test-upstream">Test</button>
             ${
               canEdit
-                ? `<button type="button" data-edit-upstream="${index}" data-testid="proxy-edit-upstream">Edit</button>`
+                ? `<button type="button" data-edit-upstream="${index}" data-testid="proxy-edit-upstream">Edit</button>
+                   <button type="button" class="danger" data-remove-upstream="${index}" data-testid="proxy-remove-upstream">Remove</button>`
                 : ""
             }
-            <button type="button" class="danger" data-remove-upstream="${index}" data-testid="proxy-remove-upstream">Remove</button>
           </span></span>
         </div>`,
       )
@@ -413,10 +428,10 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
               <span class="px-field"><span class="px-field-name">Actions</span><span class="px-actions">
                 ${
                   canEdit
-                    ? `<button type="button" data-edit-route="${index}:${routeIndex}" data-testid="proxy-edit-route">Edit</button>`
+                    ? `<button type="button" data-edit-route="${index}:${routeIndex}" data-testid="proxy-edit-route">Edit</button>
+                       <button type="button" class="danger" data-remove-route="${index}:${routeIndex}" data-testid="proxy-remove-route">Remove</button>`
                     : ""
                 }
-                <button type="button" class="danger" data-remove-route="${index}:${routeIndex}" data-testid="proxy-remove-route">Remove</button>
               </span></span>
               <span class="px-field"></span>
             </div>`,
@@ -428,10 +443,10 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
             <span class="grow"></span>
             ${
               canEdit
-                ? `<button type="button" data-edit-host="${index}" data-testid="proxy-edit-host">Edit</button>`
+                ? `<button type="button" data-edit-host="${index}" data-testid="proxy-edit-host">Edit</button>
+                   <button type="button" class="danger" data-remove-host="${index}" data-testid="proxy-remove-host">Remove host</button>`
                 : ""
             }
-            <button type="button" class="danger" data-remove-host="${index}" data-testid="proxy-remove-host">Remove host</button>
           </div>
           <div class="px-grid hosts">
             ${field("Names", host.names.join(", "))}
@@ -533,26 +548,38 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
     if (!opened) setStatus("The panel refused to open the form.", true);
   }
 
-  function receiveHost(host: ProxyHost): void {
+  function receiveHost(host: ProxyHost, replace: boolean): void {
     if (!draft) return;
-    const index = draft.hosts.findIndex((candidate) => candidate.id === host.id);
-    if (index >= 0) draft.hosts[index] = host;
-    else draft.hosts.push(host);
+    const result = upsertHost(draft.hosts, host, replace);
+    if (result.error) {
+      setStatus(result.error, true);
+      return;
+    }
+    draft.hosts = result.items;
     section = "hosts";
     render();
-    setStatus(`Host ${host.id} updated in the draft; apply to publish it.`);
+    setStatus(
+      `Host ${host.id} ${
+        replace ? "updated" : "added"
+      } in the draft; apply to publish it.`,
+    );
   }
 
-  function receiveUpstream(upstream: ProxyUpstream): void {
+  function receiveUpstream(upstream: ProxyUpstream, replace: boolean): void {
     if (!draft) return;
-    const index = draft.upstreams.findIndex(
-      (candidate) => candidate.id === upstream.id,
-    );
-    if (index >= 0) draft.upstreams[index] = upstream;
-    else draft.upstreams.push(upstream);
+    const result = upsertUpstream(draft.upstreams, upstream, replace);
+    if (result.error) {
+      setStatus(result.error, true);
+      return;
+    }
+    draft.upstreams = result.items;
     section = "upstreams";
     render();
-    setStatus(`Upstream ${upstream.id} updated in the draft.`);
+    setStatus(
+      `Upstream ${upstream.id} ${
+        replace ? "updated" : "added"
+      } in the draft.`,
+    );
   }
 
   function receiveRoute(payload: {
@@ -591,10 +618,13 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   function applyParams(params: unknown): void {
     if (!params || typeof params !== "object") return;
     const value = params as Record<string, unknown>;
-    if (value.addHost) receiveHost(value.addHost as ProxyHost);
-    else if (value.upsertHost) receiveHost(value.upsertHost as ProxyHost);
-    else if (value.upsertUpstream) {
-      receiveUpstream(value.upsertUpstream as ProxyUpstream);
+    if (value.addHost) receiveHost(value.addHost as ProxyHost, false);
+    else if (value.upsertHost) {
+      receiveHost(value.upsertHost as ProxyHost, true);
+    } else if (value.addUpstream) {
+      receiveUpstream(value.addUpstream as ProxyUpstream, false);
+    } else if (value.upsertUpstream) {
+      receiveUpstream(value.upsertUpstream as ProxyUpstream, true);
     } else if (value.upsertRoute) {
       receiveRoute(
         value.upsertRoute as { hostId?: string; route?: ProxyRoute },

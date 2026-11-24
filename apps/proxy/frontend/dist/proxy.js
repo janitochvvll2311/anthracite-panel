@@ -83,6 +83,38 @@ async function watchLogs(context, signal, onEvent) {
   }
 }
 
+// src/state.ts
+function upsertHost(hosts, host, replace) {
+  const index = hosts.findIndex((candidate) => candidate.id === host.id);
+  if (index >= 0 && !replace) {
+    return {
+      items: hosts,
+      error: `A host called ${host.id} already exists; edit it or choose another id.`
+    };
+  }
+  const items = hosts.slice();
+  if (index >= 0)
+    items[index] = host;
+  else
+    items.push(host);
+  return { items, error: null };
+}
+function upsertUpstream(upstreams, upstream, replace) {
+  const index = upstreams.findIndex((candidate) => candidate.id === upstream.id);
+  if (index >= 0 && !replace) {
+    return {
+      items: upstreams,
+      error: `An upstream called ${upstream.id} already exists; edit it or choose another id.`
+    };
+  }
+  const items = upstreams.slice();
+  if (index >= 0)
+    items[index] = upstream;
+  else
+    items.push(upstream);
+  return { items, error: null };
+}
+
 // src/styles.ts
 var styles = `
   .px { display: flex; flex-direction: column; gap: 14px; max-width: 100%; container-type: inline-size; }
@@ -267,6 +299,11 @@ function mount(root, context) {
     <p class="px-status" role="status" data-status data-testid="proxy-status"></p>
   `;
   root.append(box);
+  const applyButton = box.querySelector("[data-apply]");
+  applyButton.disabled = !canEdit;
+  if (!canEdit) {
+    applyButton.title = "This panel has no modal slot; the document is read-only here.";
+  }
   const body = box.querySelector("[data-body]");
   const banner = box.querySelector("[data-banner]");
   const statusLine = box.querySelector("[data-status]");
@@ -335,6 +372,10 @@ function mount(root, context) {
     }
   }
   async function apply() {
+    if (!canEdit) {
+      setStatus("This panel has no modal slot; the document is read-only here.", true);
+      return;
+    }
     const document2 = requireDraft();
     if (!document2 || !config)
       return;
@@ -511,8 +552,8 @@ function mount(root, context) {
           ${field("TLS", upstream["tls-verify"] ? "verify" : "no verify")}
           <span class="px-field"><span class="px-field-name">Actions</span><span class="px-actions">
             <button type="button" data-test-upstream="${escape(upstream.id)}" data-testid="proxy-test-upstream">Test</button>
-            ${canEdit ? `<button type="button" data-edit-upstream="${index}" data-testid="proxy-edit-upstream">Edit</button>` : ""}
-            <button type="button" class="danger" data-remove-upstream="${index}" data-testid="proxy-remove-upstream">Remove</button>
+            ${canEdit ? `<button type="button" data-edit-upstream="${index}" data-testid="proxy-edit-upstream">Edit</button>
+                   <button type="button" class="danger" data-remove-upstream="${index}" data-testid="proxy-remove-upstream">Remove</button>` : ""}
           </span></span>
         </div>`).join("");
     body.innerHTML = `${formNote()}<div class="px-bar"><span class="px-note">Upstreams are http(s) origins without a path.</span><span class="grow"></span>${canEdit && !hasFab ? `<button type="button" data-add-upstream data-testid="proxy-add-upstream">Add upstream</button>` : ""}</div>
@@ -552,8 +593,8 @@ function mount(root, context) {
               ${field("Limit", route["body-limit"]?.toString() ?? "")}
               <span class="px-field"></span>
               <span class="px-field"><span class="px-field-name">Actions</span><span class="px-actions">
-                ${canEdit ? `<button type="button" data-edit-route="${index}:${routeIndex}" data-testid="proxy-edit-route">Edit</button>` : ""}
-                <button type="button" class="danger" data-remove-route="${index}:${routeIndex}" data-testid="proxy-remove-route">Remove</button>
+                ${canEdit ? `<button type="button" data-edit-route="${index}:${routeIndex}" data-testid="proxy-edit-route">Edit</button>
+                       <button type="button" class="danger" data-remove-route="${index}:${routeIndex}" data-testid="proxy-remove-route">Remove</button>` : ""}
               </span></span>
               <span class="px-field"></span>
             </div>`).join("");
@@ -561,8 +602,8 @@ function mount(root, context) {
           <div class="px-card-head">
             <strong>${escape(host.id)}</strong>
             <span class="grow"></span>
-            ${canEdit ? `<button type="button" data-edit-host="${index}" data-testid="proxy-edit-host">Edit</button>` : ""}
-            <button type="button" class="danger" data-remove-host="${index}" data-testid="proxy-remove-host">Remove host</button>
+            ${canEdit ? `<button type="button" data-edit-host="${index}" data-testid="proxy-edit-host">Edit</button>
+                   <button type="button" class="danger" data-remove-host="${index}" data-testid="proxy-remove-host">Remove host</button>` : ""}
           </div>
           <div class="px-grid hosts">
             ${field("Names", host.names.join(", "))}
@@ -647,29 +688,31 @@ function mount(root, context) {
     if (!opened)
       setStatus("The panel refused to open the form.", true);
   }
-  function receiveHost(host) {
+  function receiveHost(host, replace) {
     if (!draft)
       return;
-    const index = draft.hosts.findIndex((candidate) => candidate.id === host.id);
-    if (index >= 0)
-      draft.hosts[index] = host;
-    else
-      draft.hosts.push(host);
+    const result = upsertHost(draft.hosts, host, replace);
+    if (result.error) {
+      setStatus(result.error, true);
+      return;
+    }
+    draft.hosts = result.items;
     section = "hosts";
     render();
-    setStatus(`Host ${host.id} updated in the draft; apply to publish it.`);
+    setStatus(`Host ${host.id} ${replace ? "updated" : "added"} in the draft; apply to publish it.`);
   }
-  function receiveUpstream(upstream) {
+  function receiveUpstream(upstream, replace) {
     if (!draft)
       return;
-    const index = draft.upstreams.findIndex((candidate) => candidate.id === upstream.id);
-    if (index >= 0)
-      draft.upstreams[index] = upstream;
-    else
-      draft.upstreams.push(upstream);
+    const result = upsertUpstream(draft.upstreams, upstream, replace);
+    if (result.error) {
+      setStatus(result.error, true);
+      return;
+    }
+    draft.upstreams = result.items;
     section = "upstreams";
     render();
-    setStatus(`Upstream ${upstream.id} updated in the draft.`);
+    setStatus(`Upstream ${upstream.id} ${replace ? "updated" : "added"} in the draft.`);
   }
   function receiveRoute(payload) {
     if (!draft || !payload.hostId || !payload.route)
@@ -705,11 +748,13 @@ function mount(root, context) {
       return;
     const value = params;
     if (value.addHost)
-      receiveHost(value.addHost);
-    else if (value.upsertHost)
-      receiveHost(value.upsertHost);
-    else if (value.upsertUpstream) {
-      receiveUpstream(value.upsertUpstream);
+      receiveHost(value.addHost, false);
+    else if (value.upsertHost) {
+      receiveHost(value.upsertHost, true);
+    } else if (value.addUpstream) {
+      receiveUpstream(value.addUpstream, false);
+    } else if (value.upsertUpstream) {
+      receiveUpstream(value.upsertUpstream, true);
     } else if (value.upsertRoute) {
       receiveRoute(value.upsertRoute);
     } else if (value.upsertListener) {

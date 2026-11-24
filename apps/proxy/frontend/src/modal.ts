@@ -196,7 +196,11 @@ function hostForm(box: HTMLElement, context: ModalContext): () => void {
       hsts: checked(box, "hsts"),
       routes: host?.routes ?? [],
     };
-    await deliver(box, context, { upsertHost: next });
+    await deliver(
+      box,
+      context,
+      host ? { upsertHost: next } : { addHost: next },
+    );
   });
   (box.querySelector('[name="id"]') as HTMLInputElement | null)?.focus();
   return () => {
@@ -245,7 +249,11 @@ function upstreamForm(box: HTMLElement, context: ModalContext): () => void {
       "read-timeout-ms": number(box, "read", 5000),
       "tls-verify": checked(box, "verify"),
     };
-    await deliver(box, context, { upsertUpstream: next });
+    await deliver(
+      box,
+      context,
+      upstream ? { upsertUpstream: next } : { addUpstream: next },
+    );
   });
   (box.querySelector('[name="id"]') as HTMLInputElement | null)?.focus();
   return () => {};

@@ -3,7 +3,7 @@
 The edge of the composition: a native `socket`-class app that terminates TLS,
 routes customer traffic by host and path and forwards it to configured
 upstreams. Bundle `org.anthracite.proxy`, package `anthracite:proxy@1.0.0`, one
-`panel.view` and one `panel.modal`.
+`panel.view` and four `panel.modal` slots (host, upstream, route, listener).
 
 ## Authority
 
@@ -114,10 +114,15 @@ previous document serving. The error message starts with the field path
 CLI: `anth app proxy status|hosts|routes|reload`.
 
 The panel view has four sections (listeners, hosts & routes, upstreams, access
-log). The FAB adds a host through the modal and applies the draft; the modal
-hands the host to the view with `openView` params, so the edit stays a draft
-until the operator applies it. Without a modal slot the view says so and the
-document can be edited through the API.
+log). Add and Edit both use the panel's modal slots: the FAB offers **Add
+host**, **Add upstream** and **Apply draft**, each host card and upstream row
+opens its own modal for editing, and each host adds/edits routes and listeners
+through the route and listener modals. A modal hands the edited piece to the
+view with `openView` params, so the change stays a draft until the operator
+applies it; adding a host or upstream with an existing id is refused instead of
+overwriting it. On a panel without `panel.modal` the view is read-only (Apply
+and the Remove actions are disabled) and it says so; the document can still be
+edited through the API.
 
 ## Build and test
 
