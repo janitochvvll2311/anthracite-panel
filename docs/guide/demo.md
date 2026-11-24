@@ -33,9 +33,13 @@ cargo build --manifest-path demo/emulator/Cargo.toml --release
 cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulator -- \
   --binary target/release/host-emulator --out demo/dist
 
-cargo run --manifest-path panel/backend/Cargo.toml -- \
-  --config demo/config.toml --listen 127.0.0.1:5176
+scripts/dev.sh
 ```
+
+`scripts/dev.sh` serves the developer demo on **0.0.0.0:5173** (override with
+`ANTH_DEV_LISTEN`, and the config with `ANTH_DEV_CONFIG`); 5173 is the dev port
+throughout the guide. The script builds `panel/frontend/dist` first when it is
+missing, because the debug backend reads the shell from disk.
 
 `demo/config.toml` turns signature checks and the third-party service switch on
 for development; it is a **debug** configuration and a release build refuses it.
