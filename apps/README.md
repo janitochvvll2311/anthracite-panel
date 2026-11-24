@@ -1,6 +1,10 @@
 # Apps
 
-Each app follows the same catalogue shape:
+Each app follows the same catalogue shape. The conventions the official apps
+share — the tree, the service half, the web family (tokens, forms, modals, FAB,
+responsive) and the tests — are in
+[design §30](../docs/design/30-official-app-conventions.md). A new official app
+should follow them; a third-party app only has to satisfy the contract in §7.
 
 ```
 apps/<app>/

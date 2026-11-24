@@ -4,6 +4,11 @@ An app is a signed bundle: a manifest, a WIT package, and either a WebAssembly
 component, a native service, or both. The engine verifies the bundle before it
 becomes visible and never runs a component that disagrees with its manifest.
 
+The official catalogue also shares a layout and a web design family so its apps
+feel like one product; that is described in
+[design §30](../design/30-official-app-conventions.md). It is the convention for
+our apps, not an extra requirement on a third-party bundle.
+
 ## Bundle layout
 
 ```
