@@ -82,6 +82,7 @@ export type ProxyStatus = {
   "last-error": string | null;
   version: number;
   dropped: number;
+  "handshake-errors": number;
 };
 
 export type AccessEvent = {

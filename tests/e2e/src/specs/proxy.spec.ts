@@ -22,6 +22,7 @@ test("the proxy view stays usable in the three viewport modes", async ({
   for (const mode of ["desktop", "tablet", "mobile"] as const) {
     await panel.viewport.use(mode);
     await expect(slot.html).toHaveAttribute("data-viewport", mode);
+    await panel.viewport.expectDrawer(false);
 
     for (const section of [
       "listeners",

@@ -96,16 +96,18 @@ pub async fn start(service: Arc<Service>) {
 
 async fn accept(service: Arc<Service>, bind: String, tls: bool, listener: TcpListener) {
     loop {
+        // Wait for a permit before accepting: at the cap the kernel backlog
+        // holds the pending connections instead of the accept closing them.
+        let permit = match service.permits.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => return,
+        };
         let (stream, peer) = match listener.accept().await {
             Ok(pair) => pair,
             Err(error) => {
                 eprintln!("proxy: accepting on {bind}: {error}");
                 continue;
             }
-        };
-        let permit = match service.permits.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => continue,
         };
         let service = Arc::clone(&service);
         let bind = bind.clone();
@@ -116,11 +118,14 @@ async fn accept(service: Arc<Service>, bind: String, tls: bool, listener: TcpLis
                 let Some(config) = config else {
                     return;
                 };
-                let accepted =
-                    tokio::time::timeout(TLS_HANDSHAKE, TlsAcceptor::from(config).accept(stream))
-                        .await;
-                if let Ok(Ok(stream)) = accepted {
-                    serve(service, bind, peer, true, stream).await;
+                match tokio::time::timeout(TLS_HANDSHAKE, TlsAcceptor::from(config).accept(stream))
+                    .await
+                {
+                    Ok(Ok(stream)) => serve(service, bind, peer, true, stream).await,
+                    Ok(Err(error)) => {
+                        service.note_handshake_failure(&bind, peer, &error.to_string())
+                    }
+                    Err(_) => service.note_handshake_failure(&bind, peer, "timeout"),
                 }
             } else {
                 serve(service, bind, peer, false, stream).await;
@@ -403,36 +408,7 @@ async fn forward(
         }
     }
 
-    let mut headers = http::HeaderMap::new();
-    for (name, value) in request.headers() {
-        if name == HOST || hop_by_hop(name.as_str()) {
-            continue;
-        }
-        if !listener.forwarded && is_forwarded(name.as_str()) {
-            continue;
-        }
-        headers.append(name.clone(), value.clone());
-    }
-    if upgrade {
-        headers.insert(CONNECTION, HeaderValue::from_static("upgrade"));
-        if let Some(upgrade_value) = request.headers().get(UPGRADE) {
-            headers.insert(UPGRADE, upgrade_value.clone());
-        }
-    }
-    if listener.forwarded {
-        headers.insert(
-            HeaderName::from_static("x-forwarded-for"),
-            HeaderValue::from_str(&peer.ip().to_string())
-                .unwrap_or_else(|_| HeaderValue::from_static("unknown")),
-        );
-        headers.insert(
-            HeaderName::from_static("x-forwarded-proto"),
-            HeaderValue::from_static(if tls { "https" } else { "http" }),
-        );
-        if let Ok(value) = HeaderValue::from_str(host_name) {
-            headers.insert(HeaderName::from_static("x-forwarded-host"), value);
-        }
-    }
+    let headers = forwarded_headers(request.headers(), listener, upgrade, peer, tls, host_name);
 
     let body = Limited::new(request.into_body(), limit as usize)
         .map_err(BoxError::from)
@@ -524,6 +500,63 @@ fn is_forwarded(name: &str) -> bool {
     name.to_ascii_lowercase().starts_with("x-forwarded-")
 }
 
+/// The headers a `Connection` value declares hop-by-hop (RFC 9110 §7.6.1).
+fn connection_tokens(headers: &http::HeaderMap) -> Vec<String> {
+    headers
+        .get_all(CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn forwarded_headers(
+    source: &http::HeaderMap,
+    listener: &crate::service::ListenerPlan,
+    upgrade: bool,
+    peer: SocketAddr,
+    tls: bool,
+    host_name: &str,
+) -> http::HeaderMap {
+    let tokens = connection_tokens(source);
+    let mut headers = http::HeaderMap::new();
+    for (name, value) in source {
+        if name == HOST
+            || hop_by_hop(name.as_str())
+            || tokens.iter().any(|token| token == name.as_str())
+        {
+            continue;
+        }
+        if !listener.forwarded && is_forwarded(name.as_str()) {
+            continue;
+        }
+        headers.append(name.clone(), value.clone());
+    }
+    if upgrade {
+        headers.insert(CONNECTION, HeaderValue::from_static("upgrade"));
+        if let Some(upgrade_value) = source.get(UPGRADE) {
+            headers.insert(UPGRADE, upgrade_value.clone());
+        }
+    }
+    if listener.forwarded {
+        headers.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_str(&peer.ip().to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("unknown")),
+        );
+        headers.insert(
+            HeaderName::from_static("x-forwarded-proto"),
+            HeaderValue::from_static(if tls { "https" } else { "http" }),
+        );
+        if let Ok(value) = HeaderValue::from_str(host_name) {
+            headers.insert(HeaderName::from_static("x-forwarded-host"), value);
+        }
+    }
+    headers
+}
+
 fn query_suffix(request: &Request<Incoming>) -> String {
     request
         .uri()
@@ -575,9 +608,13 @@ fn content_length(response: &Response<ProxyBody>) -> u64 {
 }
 
 fn response_headers(upstream: &http::HeaderMap, route: &[Header], hsts: bool) -> http::HeaderMap {
+    let tokens = connection_tokens(upstream);
     let mut headers = http::HeaderMap::new();
     for (name, value) in upstream {
-        if hop_by_hop(name.as_str()) || name == TRANSFER_ENCODING {
+        if hop_by_hop(name.as_str())
+            || name == TRANSFER_ENCODING
+            || tokens.iter().any(|token| token == name.as_str())
+        {
             continue;
         }
         headers.append(name.clone(), value.clone());
@@ -655,6 +692,46 @@ mod tests {
     }
 
     #[test]
+    fn connection_tokens_are_hop_by_hop_on_requests() {
+        let mut source = http::HeaderMap::new();
+        source.insert(
+            CONNECTION,
+            HeaderValue::from_static("keep-alive, X-Api-Key"),
+        );
+        source.insert(
+            HeaderName::from_static("x-api-key"),
+            HeaderValue::from_static("secret"),
+        );
+        source.insert(
+            HeaderName::from_static("x-request-id"),
+            HeaderValue::from_static("1"),
+        );
+        source.insert(HOST, HeaderValue::from_static("a.test"));
+        let listener = crate::service::ListenerPlan {
+            tls: false,
+            default_host: None,
+            forwarded: false,
+        };
+        let headers = forwarded_headers(
+            &source,
+            &listener,
+            false,
+            "127.0.0.1:5000".parse().expect("peer"),
+            false,
+            "a.test",
+        );
+        assert!(!headers.contains_key("x-api-key"));
+        assert!(!headers.contains_key(HOST));
+        assert!(!headers.contains_key(CONNECTION));
+        assert_eq!(
+            headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+    }
+
+    #[test]
     fn a_bind_with_a_bare_port_gets_a_host() {
         assert_eq!(socket_address(":8080"), "0.0.0.0:8080");
         assert_eq!(socket_address("127.0.0.1:8443"), "127.0.0.1:8443");
@@ -668,6 +745,11 @@ mod tests {
             HeaderValue::from_static("session=abc; HttpOnly"),
         );
         upstream.insert(TE, HeaderValue::from_static("trailers"));
+        upstream.insert(CONNECTION, HeaderValue::from_static("x-secret"));
+        upstream.insert(
+            HeaderName::from_static("x-secret"),
+            HeaderValue::from_static("hidden"),
+        );
         let route = vec![Header {
             name: "x-frame-options".to_string(),
             value: "DENY".to_string(),
@@ -675,6 +757,7 @@ mod tests {
         let headers = response_headers(&upstream, &route, true);
         assert!(headers.contains_key(http::header::SET_COOKIE));
         assert!(!headers.contains_key(TE));
+        assert!(!headers.contains_key("x-secret"));
         assert_eq!(
             headers
                 .get("x-frame-options")

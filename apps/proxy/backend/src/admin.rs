@@ -26,6 +26,7 @@ pub struct ProxyStatus {
     pub last_error: Option<String>,
     pub version: u64,
     pub dropped: u64,
+    pub handshake_errors: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

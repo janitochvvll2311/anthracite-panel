@@ -104,7 +104,10 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
     }
     running.textContent = status.running ? "running" : "stopped";
     running.className = status.running ? "px-badge ok" : "px-badge bad";
-    running.title = status.listeners.join(", ");
+    const handshakes = status["handshake-errors"] ?? 0;
+    running.title = `${status.listeners.join(", ")}${
+      handshakes ? ` · ${handshakes} TLS handshake error(s)` : ""
+    }`;
     banner.hidden = !status["last-error"];
     banner.textContent = status["last-error"] ?? "";
   };
@@ -567,7 +570,11 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   }
 
   function renderLogs(): void {
-    body.innerHTML = `<div class="px-bar"><span class="px-note">One event per request; the stream drops under budget and reports the count.</span><span class="grow"></span><span class="px-badge" data-log-count>${events.length} events</span><span class="px-badge">dropped ${status?.dropped ?? 0}</span><button type="button" data-clear-log>Clear</button></div>
+    body.innerHTML = `<div class="px-bar"><span class="px-note">One event per request; the stream drops under budget and reports the count.</span><span class="grow"></span><span class="px-badge" data-log-count>${events.length} events</span><span class="px-badge">dropped ${status?.dropped ?? 0}</span>${
+      (status?.["handshake-errors"] ?? 0) > 0
+        ? `<span class="px-badge bad">handshake errors ${status?.["handshake-errors"]}</span>`
+        : ""
+    }<button type="button" data-clear-log>Clear</button></div>
       <div class="px-log" data-log data-testid="proxy-log">${events.map(eventRow).join("")}</div>`;
     body.querySelector("[data-clear-log]")?.addEventListener("click", () => {
       events = [];

@@ -162,6 +162,7 @@ pub struct Service {
     status: Mutex<Status>,
     bound: RwLock<Vec<(String, String)>>,
     temp: AtomicU64,
+    handshake_failures: AtomicU64,
     runtime: Option<tokio::runtime::Handle>,
 }
 
@@ -198,6 +199,7 @@ impl Service {
             }),
             bound: RwLock::new(Vec::new()),
             temp: AtomicU64::new(0),
+            handshake_failures: AtomicU64::new(0),
             runtime: tokio::runtime::Handle::try_current().ok(),
         });
         match service.load() {
@@ -234,6 +236,7 @@ impl Service {
             last_error: status.last_error.clone(),
             version: status.version,
             dropped: self.logs.dropped(),
+            handshake_errors: self.handshake_failures.load(Ordering::Relaxed),
         }
     }
 
@@ -254,6 +257,15 @@ impl Service {
     pub fn note_error(&self, error: &str) {
         let mut status = self.status.lock().expect("status");
         status.last_error = Some(error.to_string());
+    }
+
+    /// A failed TLS handshake never reaches the request layer; keep a trace
+    /// without letting a bad client flood the log.
+    pub fn note_handshake_failure(&self, bind: &str, peer: std::net::SocketAddr, reason: &str) {
+        let count = self.handshake_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if count <= 3 || count.is_multiple_of(100) {
+            eprintln!("proxy: TLS handshake on {bind} from {peer} failed ({count}): {reason}");
+        }
     }
 
     pub fn note_reload(&self, version: u64) {

@@ -49,6 +49,12 @@ export class Viewport {
     }
     await this.select.selectOption(mode);
     await expect(this.html).toHaveAttribute("data-viewport-mode", mode);
+    // Revealing the selector opened the drawer; leaving it open keeps the
+    // workspace inert and app-frame clicks never land.
+    if ((await this.body.getAttribute("data-drawer")) === "open") {
+      await this.drawerClose.click();
+      await this.expectDrawer(false);
+    }
   }
 
   async expectEffective(mode: "desktop" | "tablet" | "mobile"): Promise<void> {

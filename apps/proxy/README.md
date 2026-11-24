@@ -95,7 +95,8 @@ previous document serving. The error message starts with the field path
   pair); cookies and `Origin` are preserved.
 - Access log: one event per request on `GET /logs` (`text/event-stream` via the
   engine). The queue is bounded per viewer; a slow viewer drops events and
-  `status.dropped` reports the count.
+  `status.dropped` reports the count. Failed or timed-out TLS handshakes leave a
+  rate-limited trace and `status.handshake-errors` counts them.
 
 ## Surface
 

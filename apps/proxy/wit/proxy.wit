@@ -59,6 +59,7 @@ interface admin {
         last-error: option<string>,
         version: u64,
         dropped: u64,
+        handshake-errors: u64,
     }
 
     record access-event {

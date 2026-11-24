@@ -36,7 +36,7 @@ if ! command -v "$cargo_bin" >/dev/null 2>&1; then
 fi
 
 if [ ! -f panel/frontend/dist/main.js ] \
-    || [ -n "$(find panel/frontend/src -newer panel/frontend/dist/main.js 2>/dev/null | head -1)" ]; then
+    || [ -n "$(find panel/frontend/src sdk/ts/panel/src -newer panel/frontend/dist/main.js 2>/dev/null | head -1)" ]; then
     echo "dev: building the panel shell"
     (
         cd panel/frontend
