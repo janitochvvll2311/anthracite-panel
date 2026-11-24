@@ -155,10 +155,11 @@ var styles = `
 var extra = `
   .pxm { display: flex; flex-direction: column; gap: 12px; }
   .pxm label { display: flex; flex-direction: column; gap: 4px; color: #98a2b6; font-size: 12px; }
-  .pxm input[type="text"], .pxm select {
-    padding: 6px 8px; border-radius: 7px; border: 1px solid #2a3142;
+  .pxm input[type="text"], .pxm input[type="number"], .pxm select {
+    width: 100%; padding: 6px 8px; border-radius: 7px; border: 1px solid #2a3142;
     background: #11151d; color: #d6dcea; font: inherit; font-size: 13px;
   }
+  .pxm input:disabled { color: #7a8497; }
   .pxm-row { display: flex; gap: 14px; flex-wrap: wrap; }
   .pxm-actions { display: flex; gap: 8px; justify-content: flex-end; }
   .pxm button {
@@ -168,43 +169,88 @@ var extra = `
   .pxm button.primary { border-color: #33507a; background: #16233a; color: #dbe6ff; }
   .pxm-status { margin: 0; font-size: 12px; color: #8f98ab; }
   .pxm-status.bad { color: #ffb3ba; }
+  @media (max-width: 720px) {
+    .pxm-actions { flex-direction: column-reverse; }
+    .pxm-actions button { width: 100%; }
+  }
 `;
-function mount(root, context) {
+function frame(root) {
   const style = document.createElement("style");
   style.textContent = styles + extra;
   root.append(style);
   const box = document.createElement("div");
   box.className = "pxm";
-  box.innerHTML = `
-    <label>Id<input type="text" name="id" placeholder="site" autofocus required /></label>
-    <label>Names<input type="text" name="names" placeholder="example.com, www.example.com" required /></label>
-    <label>Certificate<select name="certificate"><option value="">(none)</option></select></label>
-    <div class="pxm-row">
-      <label class="px-check"><input type="checkbox" name="acme" /> serve ACME HTTP-01</label>
-      <label class="px-check"><input type="checkbox" name="redirect" /> redirect HTTP to HTTPS</label>
-      <label class="px-check"><input type="checkbox" name="hsts" /> HSTS</label>
-    </div>
-    <div class="pxm-actions">
-      <button type="button" data-cancel>Cancel</button>
-      <button type="submit" class="primary" data-submit>Add to draft</button>
-    </div>
-    <p class="pxm-status" role="status" data-status></p>
-  `;
   root.append(box);
-  const certificate = box.querySelector('select[name="certificate"]');
-  const status = box.querySelector("[data-status]");
+  return { style, box };
+}
+function status(box) {
+  return box.querySelector("[data-status]");
+}
+function setStatus(box, message, bad = false) {
+  const node = status(box);
+  node.textContent = message;
+  node.className = bad ? "pxm-status bad" : "pxm-status";
+}
+function text(box, name) {
+  return box.querySelector(`[name="${name}"]`)?.value.trim() ?? "";
+}
+function number(box, name, fallback) {
+  const value = Number(text(box, name));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+function checked(box, name) {
+  return box.querySelector(`[name="${name}"]`)?.checked ?? false;
+}
+function escape(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+async function loadConfig(context) {
+  return await call(context, "/config");
+}
+function actions() {
+  return `<div class="pxm-actions">
+    <button type="button" data-cancel data-testid="proxy-modal-cancel">Cancel</button>
+    <button type="button" class="primary" data-submit data-testid="proxy-modal-submit">Save</button>
+  </div>
+  <p class="pxm-status" role="status" data-status data-testid="proxy-modal-status"></p>`;
+}
+function wire(box, context, commit) {
   const submit = box.querySelector("[data-submit]");
+  box.querySelector("[data-cancel]")?.addEventListener("click", () => context.close());
+  submit.addEventListener("click", () => void commit());
+  box.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    }
+  });
+}
+async function deliver(box, context, params) {
+  const submit = box.querySelector("[data-submit]");
+  submit.disabled = true;
+  const opened = await context.openView?.({ tag: "anth-proxy", params });
+  if (!opened) {
+    submit.disabled = false;
+    setStatus(box, "The panel did not hand the draft back to the view.", true);
+    return;
+  }
+  context.close();
+}
+function hostForm(box, context) {
+  const host = context.params?.host;
   let disposed = false;
-  const setStatus = (message, bad = false) => {
-    status.textContent = message;
-    status.className = bad ? "pxm-status bad" : "pxm-status";
-  };
-  const value = (name) => {
-    const input = box.querySelector(`[name="${name}"]`);
-    return input?.value.trim() ?? "";
-  };
-  const checked = (name) => box.querySelector(`[name="${name}"]`)?.checked ?? false;
-  async function loadCertificates() {
+  box.innerHTML = `
+    <label>Id<input type="text" name="id" data-testid="proxy-host-id" value="${escape(host?.id ?? "")}" ${host ? "disabled" : ""} placeholder="site" /></label>
+    <label>Names<input type="text" name="names" data-testid="proxy-host-names" value="${escape(host?.names.join(", ") ?? "")}" placeholder="example.com, www.example.com" /></label>
+    <label>Certificate<select name="certificate" data-testid="proxy-host-certificate"><option value="">(none)</option></select></label>
+    <div class="pxm-row">
+      <label class="px-check"><input type="checkbox" name="acme" data-testid="proxy-host-acme" ${host?.acme ? "checked" : ""} /> serve ACME HTTP-01</label>
+      <label class="px-check"><input type="checkbox" name="redirect" data-testid="proxy-host-redirect" ${host?.["redirect-https"] ? "checked" : ""} /> redirect HTTP to HTTPS</label>
+      <label class="px-check"><input type="checkbox" name="hsts" data-testid="proxy-host-hsts" ${host?.hsts ? "checked" : ""} /> HSTS</label>
+    </div>
+    ${actions()}`;
+  const certificate = box.querySelector('select[name="certificate"]');
+  (async () => {
     try {
       const ids = await call(context, "/certificates");
       if (disposed)
@@ -215,63 +261,201 @@ function mount(root, context) {
         option.textContent = id;
         certificate.append(option);
       }
+      certificate.value = host?.certificate ?? "";
     } catch (error) {
       if (!disposed)
-        setStatus(String(error), true);
+        setStatus(box, String(error), true);
     }
-  }
-  async function commit() {
-    const id = value("id");
-    const names = value("names").split(",").map((name) => name.trim().toLowerCase()).filter(Boolean);
+  })();
+  wire(box, context, async () => {
+    const id = text(box, "id");
+    const names = text(box, "names").split(",").map((name) => name.trim().toLowerCase()).filter(Boolean);
     if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-      setStatus("The id is lowercase letters, digits and dashes.", true);
+      setStatus(box, "The id is lowercase letters, digits and dashes.", true);
       return;
     }
     if (names.length === 0) {
-      setStatus("At least one host name is required.", true);
+      setStatus(box, "At least one host name is required.", true);
       return;
     }
-    const host = {
+    const next = {
       id,
       names,
       certificate: certificate.value || null,
-      acme: checked("acme"),
-      "redirect-https": checked("redirect"),
-      hsts: checked("hsts"),
-      routes: []
+      acme: checked(box, "acme"),
+      "redirect-https": checked(box, "redirect"),
+      hsts: checked(box, "hsts"),
+      routes: host?.routes ?? []
     };
-    submit.disabled = true;
-    setStatus("Handing the host to the view…");
-    try {
-      const opened = await context.openView?.({
-        tag: "anth-proxy",
-        params: { addHost: host }
-      });
-      if (!opened) {
-        submit.disabled = false;
-        setStatus("The panel did not hand the host to the view.", true);
-        return;
-      }
-      if (!disposed)
-        context.close();
-    } catch (error) {
-      submit.disabled = false;
-      if (!disposed)
-        setStatus(String(error), true);
-    }
-  }
-  submit.addEventListener("click", () => void commit());
-  box.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      commit();
-    }
+    await deliver(box, context, { upsertHost: next });
   });
-  box.querySelector("[data-cancel]")?.addEventListener("click", () => context.close());
-  loadCertificates();
   box.querySelector('[name="id"]')?.focus();
   return () => {
     disposed = true;
+  };
+}
+function upstreamForm(box, context) {
+  const upstream = context.params?.upstream;
+  box.innerHTML = `
+    <label>Id<input type="text" name="id" data-testid="proxy-upstream-id" value="${escape(upstream?.id ?? "")}" ${upstream ? "disabled" : ""} placeholder="app" /></label>
+    <label>URL<input type="text" name="url" data-testid="proxy-upstream-url" value="${escape(upstream?.url ?? "")}" placeholder="http://127.0.0.1:3000" /></label>
+    <div class="pxm-row">
+      <label>Connect ms<input type="number" min="1" max="300000" name="connect" data-testid="proxy-upstream-connect" value="${upstream?.["connect-timeout-ms"] ?? 2000}" /></label>
+      <label>Read ms<input type="number" min="1" max="300000" name="read" data-testid="proxy-upstream-read" value="${upstream?.["read-timeout-ms"] ?? 5000}" /></label>
+    </div>
+    <label class="px-check"><input type="checkbox" name="verify" data-testid="proxy-upstream-verify" ${upstream ? upstream["tls-verify"] ? "checked" : "" : "checked"} /> verify the upstream certificate</label>
+    ${actions()}`;
+  wire(box, context, async () => {
+    const id = text(box, "id");
+    const url = text(box, "url");
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+      setStatus(box, "The id is lowercase letters, digits and dashes.", true);
+      return;
+    }
+    if (!/^https?:\/\//.test(url)) {
+      setStatus(box, "The URL starts with http:// or https://.", true);
+      return;
+    }
+    const next = {
+      id,
+      url,
+      "connect-timeout-ms": number(box, "connect", 2000),
+      "read-timeout-ms": number(box, "read", 5000),
+      "tls-verify": checked(box, "verify")
+    };
+    await deliver(box, context, { upsertUpstream: next });
+  });
+  box.querySelector('[name="id"]')?.focus();
+  return () => {};
+}
+function routeForm(box, context) {
+  const params = context.params;
+  const route = params?.route;
+  const hostId = params?.hostId ?? "";
+  let disposed = false;
+  box.innerHTML = `
+    <label>Match<input type="text" name="match" data-testid="proxy-route-match" value="${escape(route?.match ?? "")}" placeholder="= /health or /" /></label>
+    <label>Upstream<select name="upstream" data-testid="proxy-route-upstream"><option value="">(none)</option></select></label>
+    <label>Redirect<input type="text" name="redirect" data-testid="proxy-route-redirect" value="${escape(route?.redirect ?? "")}" placeholder="optional https://… or /path" /></label>
+    <div class="pxm-row">
+      <label class="px-check"><input type="checkbox" name="strip" data-testid="proxy-route-strip" ${route?.["strip-prefix"] ? "checked" : ""} /> strip the prefix</label>
+      <label class="px-check"><input type="checkbox" name="websocket" data-testid="proxy-route-websocket" ${route?.websocket ? "checked" : ""} /> WebSocket</label>
+      <label>Body limit<input type="number" min="1" name="limit" data-testid="proxy-route-limit" value="${route?.["body-limit"] ?? ""}" placeholder="default" /></label>
+    </div>
+    ${actions()}`;
+  const upstream = box.querySelector('select[name="upstream"]');
+  (async () => {
+    try {
+      const ids = params?.upstreams ?? (await loadConfig(context)).upstreams.map((entry) => entry.id);
+      if (disposed)
+        return;
+      for (const id of ids) {
+        const option = document.createElement("option");
+        option.value = id;
+        option.textContent = id;
+        upstream.append(option);
+      }
+      upstream.value = route?.upstream ?? "";
+    } catch (error) {
+      if (!disposed)
+        setStatus(box, String(error), true);
+    }
+  })();
+  wire(box, context, async () => {
+    const match = text(box, "match");
+    const redirect = text(box, "redirect");
+    const selected = upstream.value;
+    if (!match.startsWith("/") && !match.startsWith("= /")) {
+      setStatus(box, "The match starts with `/` or `= /`.", true);
+      return;
+    }
+    if (!redirect && !selected) {
+      setStatus(box, "Choose an upstream or write a redirect.", true);
+      return;
+    }
+    const limit = text(box, "limit");
+    const next = {
+      id: route?.id ?? "",
+      match,
+      upstream: redirect ? null : selected,
+      "strip-prefix": checked(box, "strip"),
+      websocket: checked(box, "websocket"),
+      redirect: redirect || null,
+      headers: route?.headers ?? [],
+      "body-limit": limit ? Number(limit) : null
+    };
+    await deliver(box, context, { upsertRoute: { hostId, route: next } });
+  });
+  box.querySelector('[name="match"]')?.focus();
+  return () => {
+    disposed = true;
+  };
+}
+function listenerForm(box, context) {
+  const params = context.params;
+  const listener = params?.listener;
+  let disposed = false;
+  box.innerHTML = `
+    <label>Id<input type="text" value="${escape(listener?.id ?? "")}" disabled /></label>
+    <label>Bind<input type="text" value="${escape(listener?.bind ?? "")}" disabled /></label>
+    <label>Default host<select name="default-host" data-testid="proxy-listener-default"><option value="">(none)</option></select></label>
+    <label class="px-check"><input type="checkbox" name="forwarded" data-testid="proxy-listener-forwarded" ${listener?.forwarded ? "checked" : ""} /> trust and set X-Forwarded-*</label>
+    ${actions()}`;
+  const select = box.querySelector('select[name="default-host"]');
+  (async () => {
+    try {
+      const hosts = params?.hosts ?? (await loadConfig(context)).hosts.map((host) => ({
+        id: host.id,
+        names: host.names
+      }));
+      if (disposed)
+        return;
+      for (const host of hosts) {
+        const option = document.createElement("option");
+        option.value = host.id;
+        option.textContent = `${host.id} (${host.names.join(", ")})`;
+        select.append(option);
+      }
+      select.value = listener?.["default-host"] ?? "";
+    } catch (error) {
+      if (!disposed)
+        setStatus(box, String(error), true);
+    }
+  })();
+  wire(box, context, async () => {
+    if (!listener) {
+      setStatus(box, "The listener is missing.", true);
+      return;
+    }
+    const next = {
+      ...listener,
+      "default-host": select.value || null,
+      forwarded: checked(box, "forwarded")
+    };
+    await deliver(box, context, { upsertListener: next });
+  });
+  return () => {
+    disposed = true;
+  };
+}
+function mount(root, context) {
+  const { box } = frame(root);
+  let disposeInner;
+  switch (context.contribution.tag) {
+    case "proxy-upstream-modal":
+      disposeInner = upstreamForm(box, context);
+      break;
+    case "proxy-route-modal":
+      disposeInner = routeForm(box, context);
+      break;
+    case "proxy-listener-modal":
+      disposeInner = listenerForm(box, context);
+      break;
+    default:
+      disposeInner = hostForm(box, context);
+  }
+  return () => {
+    disposeInner();
     root.replaceChildren();
   };
 }

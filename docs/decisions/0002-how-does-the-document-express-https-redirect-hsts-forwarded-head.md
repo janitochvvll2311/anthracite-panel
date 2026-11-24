@@ -10,11 +10,11 @@ How does the document express HTTPS redirect, HSTS, forwarded headers, body limi
 
 ## Decision
 
-Extend the design's records: `host.redirect-https`, `host.hsts`, `listener.forwarded`, `route.body-limit` and `proxy-status.dropped`.
+Extend the design's records: `host.redirect-https`, `host.hsts`, `listener.forwarded`, `route.body-limit`, `proxy-status.dropped` and `proxy-status.handshake-errors`.
 
 ## Rationale
 
-The acceptance criteria require an HTTP-to-HTTPS redirect, header policy, per-route body limits and a dropped-event count, while the §3/§4 outline had no field for them. The extensions stay in the same versioned document; there is no second config surface.
+The acceptance criteria require an HTTP-to-HTTPS redirect, header policy, per-route body limits and a dropped-event count, while the §3/§4 outline had no field for them. The extensions stay in the same versioned document; there is no second config surface. `handshake-errors` is the same class of extension: a failed or timed-out TLS handshake never reaches the request layer, so without a counter a misconfigured listener would report `running` while refusing every connection.
 
 ## Alternatives considered
 

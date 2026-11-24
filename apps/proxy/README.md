@@ -140,8 +140,8 @@ bundle is checked with:
 ## Decisions
 
 - Listener binds come from the grant, not the document (`docs/decisions`).
-- `redirect-https`, `hsts`, `forwarded`, `body-limit` and `status.dropped`
-  extend the design outline to cover the acceptance criteria without a second
-  document.
+- `redirect-https`, `hsts`, `forwarded`, `body-limit`, `status.dropped` and
+  `status.handshake-errors` extend the design outline to cover the acceptance
+  criteria without a second document.
 - One `{shared}` in argv is the validator's limit; the two subdirectories are
   derived.

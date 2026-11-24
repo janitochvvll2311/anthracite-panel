@@ -20,6 +20,7 @@ export type FrameContext = Caller & {
 };
 
 export type ModalContext = Caller & {
+  contribution: { tag: string };
   params?: unknown;
   openView?: (request: {
     tag: string;

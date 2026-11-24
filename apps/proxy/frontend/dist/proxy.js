@@ -213,13 +213,9 @@ var styles = `
 `;
 
 // src/main.ts
-var pendingHost = null;
+var pending = null;
 function onParams(params) {
-  if (!params || typeof params !== "object")
-    return;
-  const host = params.addHost;
-  if (host)
-    pendingHost?.(host);
+  pending?.(params);
 }
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -230,10 +226,9 @@ function escape(value) {
 function stamp(seconds) {
   return seconds ? new Date(seconds * 1000).toLocaleTimeString() : "—";
 }
-function option(value, label, selected) {
-  return `<option value="${escape(value)}"${selected ? " selected" : ""}>${escape(label)}</option>`;
-}
 function uniqueId(existing, base) {
+  if (!base)
+    base = "route";
   if (!existing.includes(base))
     return base;
   let index = 2;
@@ -241,10 +236,15 @@ function uniqueId(existing, base) {
     index += 1;
   return `${base}-${index}`;
 }
+function field(name, value) {
+  return `<span class="px-field"><span class="px-field-name">${name}</span><span>${escape(value)}</span></span>`;
+}
 function mount(root, context) {
   const style = document.createElement("style");
   style.textContent = styles;
   root.append(style);
+  const canEdit = context.panel?.slots?.includes("panel.modal") === true;
+  const hasFab = context.panel?.slots?.includes("panel.fab") === true;
   const box = document.createElement("div");
   box.className = "px";
   box.dataset.testid = "proxy-view";
@@ -279,6 +279,7 @@ function mount(root, context) {
   let events = [];
   let controller = null;
   let disposed = false;
+  let pendingApply = false;
   const setStatus = (message, bad = false) => {
     statusLine.textContent = message;
     statusLine.className = bad ? "px-status bad" : "px-status";
@@ -462,41 +463,39 @@ function mount(root, context) {
     else
       renderLogs();
   }
+  function formNote() {
+    return canEdit ? "" : `<div class="px-note">This panel has no modal slot; the document is read-only here.</div>`;
+  }
   function renderListeners() {
     const document2 = requireDraft();
     if (!document2)
       return;
-    const rows = document2.listeners.map((listener, index) => {
-      const hosts = document2.hosts.map((host) => option(host.id, `${host.id} (${host.names.join(", ")})`, listener["default-host"] === host.id)).join("");
-      return `<div class="px-grid hosts" data-testid="proxy-listener" data-listener-id="${escape(listener.id)}">
-          <span class="px-field"><span class="px-field-name">Id</span><span class="px-mono">${escape(listener.id)}</span></span>
-          <span class="px-field"><span class="px-field-name">Bind</span><span class="px-mono">${escape(listener.bind)}</span></span>
-          <span class="px-field"><span class="px-field-name">Kind</span><span>${listener.tls ? "TLS" : "HTTP"}</span></span>
-          <span class="px-field"><span class="px-field-name">Default host</span><select data-default-host="${index}">
-            ${option("", "(none)", listener["default-host"] === null)}
-            ${hosts}
-          </select></span>
-          <span class="px-field"><span class="px-field-name">Trust</span><label class="px-check"><input type="checkbox" data-forwarded="${index}"${listener.forwarded ? " checked" : ""} /> forwarded</label></span>
-          <span class="px-field"></span>
-        </div>`;
-    }).join("");
-    body.innerHTML = `<div class="px-note">The binds are frozen in the manifest; the document maps hosts onto them and cannot open another port.</div>
-      <div class="px-grid hosts head"><span>Id</span><span>Bind</span><span>Kind</span><span>Default host</span><span>Trust</span><span></span></div>
+    const rows = document2.listeners.map((listener, index) => `<div class="px-grid hosts" data-testid="proxy-listener" data-listener-id="${escape(listener.id)}">
+          ${field("Id", listener.id)}
+          ${field("Bind", listener.bind)}
+          ${field("Kind", listener.tls ? "TLS" : "HTTP")}
+          ${field("Default host", listener["default-host"] ?? "(none)")}
+          ${field("Trust", listener.forwarded ? "forwarded" : "—")}
+          ${field("", "")}
+          <span class="px-field"><span class="px-field-name">Actions</span><span class="px-actions">
+            ${canEdit ? `<button type="button" data-edit-listener="${index}" data-testid="proxy-edit-listener">Edit</button>` : ""}
+          </span></span>
+        </div>`).join("");
+    body.innerHTML = `${formNote()}<div class="px-note">The binds are frozen in the manifest; the document maps hosts onto them and cannot open another port.</div>
+      <div class="px-grid hosts head"><span>Id</span><span>Bind</span><span>Kind</span><span>Default host</span><span>Trust</span><span></span><span></span></div>
       ${rows || `<div class="px-empty">No listener in the document.</div>`}`;
-    body.querySelectorAll("[data-default-host]").forEach((select) => {
-      select.addEventListener("change", () => {
-        const listener = draft?.listeners[Number(select.dataset.defaultHost)];
-        if (!listener)
+    body.querySelectorAll("[data-edit-listener]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const listener = draft?.listeners[Number(button.dataset.editListener)];
+        if (!listener || !draft)
           return;
-        listener["default-host"] = select.value || null;
-      });
-    });
-    body.querySelectorAll("[data-forwarded]").forEach((input) => {
-      input.addEventListener("change", () => {
-        const listener = draft?.listeners[Number(input.dataset.forwarded)];
-        if (!listener)
-          return;
-        listener.forwarded = input.checked;
+        openForm("proxy-listener-modal", {
+          listener,
+          hosts: draft.hosts.map((host) => ({
+            id: host.id,
+            names: host.names
+          }))
+        });
       });
     });
   }
@@ -505,49 +504,23 @@ function mount(root, context) {
     if (!document2)
       return;
     const rows = document2.upstreams.map((upstream, index) => `<div class="px-grid" data-testid="proxy-upstream" data-upstream-id="${escape(upstream.id)}">
-          <span class="px-field"><span class="px-field-name">Id</span><span class="px-mono">${escape(upstream.id)}</span></span>
-          <span class="px-field"><span class="px-field-name">URL</span><input type="text" data-upstream-url="${index}" value="${escape(upstream.url)}" /></span>
-          <span class="px-field"><span class="px-field-name">Connect ms</span><input type="number" min="1" max="300000" data-upstream-connect="${index}" value="${upstream["connect-timeout-ms"]}" /></span>
-          <span class="px-field"><span class="px-field-name">Read ms</span><input type="number" min="1" max="300000" data-upstream-read="${index}" value="${upstream["read-timeout-ms"]}" /></span>
-          <span class="px-field"><span class="px-field-name">TLS</span><label class="px-check"><input type="checkbox" data-upstream-verify="${index}"${upstream["tls-verify"] ? " checked" : ""} /> verify</label></span>
+          ${field("Id", upstream.id)}
+          <span class="px-field"><span class="px-field-name">URL</span><span class="px-mono">${escape(upstream.url)}</span></span>
+          ${field("Connect ms", String(upstream["connect-timeout-ms"]))}
+          ${field("Read ms", String(upstream["read-timeout-ms"]))}
+          ${field("TLS", upstream["tls-verify"] ? "verify" : "no verify")}
           <span class="px-field"><span class="px-field-name">Actions</span><span class="px-actions">
-            <button type="button" data-test-upstream="${escape(upstream.id)}">Test</button>
-            <button type="button" class="danger" data-remove-upstream="${index}">Remove</button>
+            <button type="button" data-test-upstream="${escape(upstream.id)}" data-testid="proxy-test-upstream">Test</button>
+            ${canEdit ? `<button type="button" data-edit-upstream="${index}" data-testid="proxy-edit-upstream">Edit</button>` : ""}
+            <button type="button" class="danger" data-remove-upstream="${index}" data-testid="proxy-remove-upstream">Remove</button>
           </span></span>
         </div>`).join("");
-    body.innerHTML = `<div class="px-grid head"><span>Id</span><span>URL</span><span>Connect ms</span><span>Read ms</span><span>TLS</span><span></span></div>
-      ${rows || `<div class="px-empty">No upstream in the document.</div>`}
-      <form class="px-form" data-add-upstream>
-        <input type="text" name="id" placeholder="upstream id" required />
-        <input type="text" name="url" placeholder="http://127.0.0.1:3000" required />
-        <button type="submit">Add upstream</button>
-      </form>`;
-    body.querySelectorAll("[data-upstream-url]").forEach((input) => {
-      input.addEventListener("input", () => {
-        const upstream = draft?.upstreams[Number(input.dataset.upstreamUrl)];
-        if (upstream)
-          upstream.url = input.value;
-      });
-    });
-    body.querySelectorAll("[data-upstream-connect]").forEach((input) => {
-      input.addEventListener("input", () => {
-        const upstream = draft?.upstreams[Number(input.dataset.upstreamConnect)];
-        if (upstream)
-          upstream["connect-timeout-ms"] = Number(input.value) || 0;
-      });
-    });
-    body.querySelectorAll("[data-upstream-read]").forEach((input) => {
-      input.addEventListener("input", () => {
-        const upstream = draft?.upstreams[Number(input.dataset.upstreamRead)];
-        if (upstream)
-          upstream["read-timeout-ms"] = Number(input.value) || 0;
-      });
-    });
-    body.querySelectorAll("[data-upstream-verify]").forEach((input) => {
-      input.addEventListener("change", () => {
-        const upstream = draft?.upstreams[Number(input.dataset.upstreamVerify)];
-        if (upstream)
-          upstream["tls-verify"] = input.checked;
+    body.innerHTML = `${formNote()}<div class="px-bar"><span class="px-note">Upstreams are http(s) origins without a path.</span><span class="grow"></span>${canEdit && !hasFab ? `<button type="button" data-add-upstream data-testid="proxy-add-upstream">Add upstream</button>` : ""}</div>
+      <div class="px-grid head"><span>Id</span><span>URL</span><span>Connect ms</span><span>Read ms</span><span>TLS</span><span></span></div>
+      ${rows || `<div class="px-empty">No upstream in the document.</div>`}`;
+    body.querySelectorAll("[data-test-upstream]").forEach((button) => {
+      button.addEventListener("click", () => {
+        testUpstream(button.dataset.testUpstream ?? "");
       });
     });
     body.querySelectorAll("[data-remove-upstream]").forEach((button) => {
@@ -556,27 +529,15 @@ function mount(root, context) {
         render();
       });
     });
-    body.querySelectorAll("[data-test-upstream]").forEach((button) => {
+    body.querySelectorAll("[data-edit-upstream]").forEach((button) => {
       button.addEventListener("click", () => {
-        testUpstream(button.dataset.testUpstream ?? "");
+        const upstream = draft?.upstreams[Number(button.dataset.editUpstream)];
+        if (upstream)
+          openForm("proxy-upstream-modal", { upstream });
       });
     });
-    const form = body.querySelector("[data-add-upstream]");
-    form?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const data = new FormData(form);
-      const id = String(data.get("id") ?? "").trim();
-      const url = String(data.get("url") ?? "").trim();
-      if (!document2 || !id || !url)
-        return;
-      document2.upstreams.push({
-        id,
-        url,
-        "connect-timeout-ms": 2000,
-        "read-timeout-ms": 5000,
-        "tls-verify": true
-      });
-      render();
+    body.querySelector("[data-add-upstream]")?.addEventListener("click", () => {
+      openForm("proxy-upstream-modal");
     });
   }
   function renderHosts() {
@@ -584,84 +545,52 @@ function mount(root, context) {
     if (!document2)
       return;
     const cards = document2.hosts.map((host, index) => {
-      const options = [
-        option("", "(none)", host.certificate === null),
-        ...certificates.map((id) => option(id, id, host.certificate === id))
-      ].join("");
       const routes = host.routes.map((route, routeIndex) => `<div class="px-grid hosts" data-testid="proxy-route" data-route-id="${escape(route.id)}">
-              <span class="px-field"><span class="px-field-name">Match</span><span class="px-mono">${escape(route.match)}</span></span>
-              <span class="px-field"><span class="px-field-name">Target</span><span class="px-mono">${escape(route.redirect ? `→ ${route.redirect}` : route.upstream ?? "—")}</span></span>
-              <span class="px-field"><span class="px-field-name">Flags</span><span>${route["strip-prefix"] ? "strip" : ""}${route.websocket ? " ws" : ""}</span></span>
-              <span class="px-field"><span class="px-field-name">Limit</span><span>${route["body-limit"] ?? ""}</span></span>
+              ${field("Match", route.match)}
+              ${field("Target", route.redirect ? `→ ${route.redirect}` : route.upstream ?? "—")}
+              ${field("Flags", `${route["strip-prefix"] ? "strip" : ""}${route.websocket ? " ws" : ""}`)}
+              ${field("Limit", route["body-limit"]?.toString() ?? "")}
               <span class="px-field"></span>
-              <span class="px-field"><span class="px-field-name">Actions</span><button type="button" class="danger" data-remove-route="${index}:${routeIndex}">Remove</button></span>
+              <span class="px-field"><span class="px-field-name">Actions</span><span class="px-actions">
+                ${canEdit ? `<button type="button" data-edit-route="${index}:${routeIndex}" data-testid="proxy-edit-route">Edit</button>` : ""}
+                <button type="button" class="danger" data-remove-route="${index}:${routeIndex}" data-testid="proxy-remove-route">Remove</button>
+              </span></span>
               <span class="px-field"></span>
             </div>`).join("");
-      const upstreamOptions = [
-        option("", "(none)", false),
-        ...document2.upstreams.map((upstream) => option(upstream.id, upstream.id, false))
-      ].join("");
       return `<div class="px-card" data-testid="proxy-host" data-host-id="${escape(host.id)}">
           <div class="px-card-head">
             <strong>${escape(host.id)}</strong>
             <span class="grow"></span>
-            <button type="button" class="danger" data-remove-host="${index}">Remove host</button>
+            ${canEdit ? `<button type="button" data-edit-host="${index}" data-testid="proxy-edit-host">Edit</button>` : ""}
+            <button type="button" class="danger" data-remove-host="${index}" data-testid="proxy-remove-host">Remove host</button>
           </div>
           <div class="px-grid hosts">
-            <span class="px-field"><span class="px-field-name">Names</span><input type="text" data-host-names="${index}" value="${escape(host.names.join(", "))}" /></span>
-            <span class="px-field"><span class="px-field-name">Certificate</span><select data-host-certificate="${index}">${options}</select></span>
-            <span class="px-field"><span class="px-field-name">ACME</span><label class="px-check"><input type="checkbox" data-host-acme="${index}"${host.acme ? " checked" : ""} /> acme</label></span>
-            <span class="px-field"><span class="px-field-name">HTTPS</span><label class="px-check"><input type="checkbox" data-host-redirect="${index}"${host["redirect-https"] ? " checked" : ""} /> redirect</label></span>
-            <span class="px-field"><span class="px-field-name">HSTS</span><label class="px-check"><input type="checkbox" data-host-hsts="${index}"${host.hsts ? " checked" : ""} /> hsts</label></span>
+            ${field("Names", host.names.join(", "))}
+            ${field("Certificate", host.certificate ?? "(none)")}
+            ${field("ACME", host.acme ? "yes" : "no")}
+            ${field("HTTPS", host["redirect-https"] ? "redirect" : "no")}
+            ${field("HSTS", host.hsts ? "yes" : "no")}
             <span class="px-field"></span>
             <span class="px-field"></span>
           </div>
           <div class="px-grid hosts head"><span>Match</span><span>Target</span><span>Flags</span><span>Limit</span><span></span><span></span><span></span></div>
           ${routes || `<div class="px-empty">No route on this host.</div>`}
-          <form class="px-form" data-add-route="${index}">
-            <input type="text" name="match" placeholder="= /health or /" required />
-            <select name="upstream">${upstreamOptions}</select>
-            <input type="text" name="redirect" placeholder="optional redirect" />
-            <label class="px-check"><input type="checkbox" name="strip" /> strip</label>
-            <label class="px-check"><input type="checkbox" name="websocket" /> ws</label>
-            <input type="number" name="limit" min="1" placeholder="body limit" />
-            <button type="submit">Add route</button>
-          </form>
+          ${canEdit ? `<div class="px-bar"><span class="grow"></span><button type="button" data-add-route="${index}" data-testid="proxy-add-route">Add route</button></div>` : ""}
         </div>`;
     }).join("");
-    body.innerHTML = `<div class="px-bar"><span class="px-note">A host is one certificate and one route table; an unmatched name goes to the listener default.</span><span class="grow"></span><button type="button" data-add-host data-testid="proxy-add-host">Add host</button></div>
+    body.innerHTML = `${formNote()}<div class="px-bar"><span class="px-note">A host is one certificate and one route table; an unmatched name goes to the listener default.</span><span class="grow"></span>${canEdit && !hasFab ? `<button type="button" data-add-host data-testid="proxy-add-host">Add host</button>` : ""}</div>
       ${cards || `<div class="px-empty">No host in the document.</div>`}`;
-    body.querySelectorAll("[data-host-names]").forEach((input) => {
-      input.addEventListener("input", () => {
-        const host = draft?.hosts[Number(input.dataset.hostNames)];
-        if (host)
-          host.names = input.value.split(",").map((name) => name.trim()).filter(Boolean);
-      });
-    });
-    body.querySelectorAll("[data-host-certificate]").forEach((select) => {
-      select.addEventListener("change", () => {
-        const host = draft?.hosts[Number(select.dataset.hostCertificate)];
-        if (host)
-          host.certificate = select.value || null;
-      });
-    });
-    for (const [selector, key, field] of [
-      ["[data-host-acme]", "hostAcme", "acme"],
-      ["[data-host-redirect]", "hostRedirect", "redirect-https"],
-      ["[data-host-hsts]", "hostHsts", "hsts"]
-    ]) {
-      body.querySelectorAll(selector).forEach((input) => {
-        input.addEventListener("change", () => {
-          const host = draft?.hosts[Number(input.dataset[key])];
-          if (host)
-            host[field] = input.checked;
-        });
-      });
-    }
     body.querySelectorAll("[data-remove-host]").forEach((button) => {
       button.addEventListener("click", () => {
         draft?.hosts.splice(Number(button.dataset.removeHost), 1);
         render();
+      });
+    });
+    body.querySelectorAll("[data-edit-host]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const host = draft?.hosts[Number(button.dataset.editHost)];
+        if (host)
+          openForm("proxy-host-modal", { host });
       });
     });
     body.querySelectorAll("[data-remove-route]").forEach((button) => {
@@ -671,33 +600,33 @@ function mount(root, context) {
         render();
       });
     });
-    body.querySelectorAll("[data-add-route]").forEach((form) => {
-      form.addEventListener("submit", (event) => {
-        event.preventDefault();
-        const index = Number(form.dataset.addRoute);
-        const host = draft?.hosts[index];
-        if (!host)
+    body.querySelectorAll("[data-edit-route]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const [hostIndex, routeIndex] = String(button.dataset.editRoute).split(":").map(Number);
+        const host = draft?.hosts[hostIndex];
+        const route = host?.routes[routeIndex];
+        if (!host || !route || !draft)
           return;
-        const data = new FormData(form);
-        const redirect = String(data.get("redirect") ?? "").trim();
-        const upstream = String(data.get("upstream") ?? "").trim();
-        const limit = String(data.get("limit") ?? "").trim();
-        const route = {
-          id: uniqueId(host.routes.map((route) => route.id), "route"),
-          match: String(data.get("match") ?? "").trim(),
-          upstream: redirect ? null : upstream || null,
-          "strip-prefix": data.get("strip") === "on",
-          websocket: data.get("websocket") === "on",
-          redirect: redirect || null,
-          headers: [],
-          "body-limit": limit ? Number(limit) : null
-        };
-        host.routes.push(route);
-        render();
+        openForm("proxy-route-modal", {
+          hostId: host.id,
+          route,
+          upstreams: draft.upstreams.map((upstream) => upstream.id)
+        });
+      });
+    });
+    body.querySelectorAll("[data-add-route]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const host = draft?.hosts[Number(button.dataset.addRoute)];
+        if (!host || !draft)
+          return;
+        openForm("proxy-route-modal", {
+          hostId: host.id,
+          upstreams: draft.upstreams.map((upstream) => upstream.id)
+        });
       });
     });
     body.querySelector("[data-add-host]")?.addEventListener("click", () => {
-      addHost();
+      openForm("proxy-host-modal");
     });
   }
   function renderLogs() {
@@ -709,28 +638,86 @@ function mount(root, context) {
     });
     startLogs();
   }
-  async function addHost() {
-    if (!context.openModal) {
-      setStatus("This panel has no modal slot; add the host in the document directly.", true);
+  async function openForm(tag, params) {
+    if (!canEdit || !context.openModal) {
+      setStatus("This panel has no modal slot; the document is read-only here.", true);
       return;
     }
-    const opened = await context.openModal({ tag: "proxy-host-modal" });
+    const opened = await context.openModal({ tag, params });
     if (!opened)
-      setStatus("The panel refused to open the add-host modal.", true);
+      setStatus("The panel refused to open the form.", true);
   }
   function receiveHost(host) {
     if (!draft)
       return;
-    if (draft.hosts.some((candidate) => candidate.id === host.id)) {
-      setStatus(`A host called ${host.id} already exists.`, true);
-      return;
-    }
-    draft.hosts.push(host);
+    const index = draft.hosts.findIndex((candidate) => candidate.id === host.id);
+    if (index >= 0)
+      draft.hosts[index] = host;
+    else
+      draft.hosts.push(host);
     section = "hosts";
     render();
-    setStatus(`Added ${host.id} to the draft; apply to publish it.`);
+    setStatus(`Host ${host.id} updated in the draft; apply to publish it.`);
   }
-  pendingHost = receiveHost;
+  function receiveUpstream(upstream) {
+    if (!draft)
+      return;
+    const index = draft.upstreams.findIndex((candidate) => candidate.id === upstream.id);
+    if (index >= 0)
+      draft.upstreams[index] = upstream;
+    else
+      draft.upstreams.push(upstream);
+    section = "upstreams";
+    render();
+    setStatus(`Upstream ${upstream.id} updated in the draft.`);
+  }
+  function receiveRoute(payload) {
+    if (!draft || !payload.hostId || !payload.route)
+      return;
+    const host = draft.hosts.find((candidate) => candidate.id === payload.hostId);
+    if (!host)
+      return;
+    const route = { ...payload.route };
+    if (!route.id) {
+      route.id = uniqueId(host.routes.map((candidate) => candidate.id), "route");
+    }
+    const index = host.routes.findIndex((candidate) => candidate.id === route.id);
+    if (index >= 0)
+      host.routes[index] = route;
+    else
+      host.routes.push(route);
+    section = "hosts";
+    render();
+    setStatus(`Route ${route.match} updated in the draft.`);
+  }
+  function receiveListener(listener) {
+    if (!draft)
+      return;
+    const index = draft.listeners.findIndex((candidate) => candidate.id === listener.id);
+    if (index >= 0)
+      draft.listeners[index] = listener;
+    section = "listeners";
+    render();
+    setStatus(`Listener ${listener.id} updated in the draft.`);
+  }
+  function applyParams(params) {
+    if (!params || typeof params !== "object")
+      return;
+    const value = params;
+    if (value.addHost)
+      receiveHost(value.addHost);
+    else if (value.upsertHost)
+      receiveHost(value.upsertHost);
+    else if (value.upsertUpstream) {
+      receiveUpstream(value.upsertUpstream);
+    } else if (value.upsertRoute) {
+      receiveRoute(value.upsertRoute);
+    } else if (value.upsertListener) {
+      receiveListener(value.upsertListener);
+    }
+    pendingApply = true;
+  }
+  pending = applyParams;
   box.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", () => {
       section = button.dataset.section ?? "listeners";
@@ -749,10 +736,16 @@ function mount(root, context) {
   const offAction = context.onAction?.((tag) => {
     if (tag === "apply")
       apply();
-    else if (tag === "refresh")
+    else if (tag === "refresh") {
+      if (pendingApply) {
+        pendingApply = false;
+        return;
+      }
       load();
-    else if (tag === "add-host")
-      addHost();
+    } else if (tag === "add-host")
+      openForm("proxy-host-modal");
+    else if (tag === "add-upstream")
+      openForm("proxy-upstream-modal");
   });
   const offVisibility = context.onVisibility?.((visible) => {
     if (!visible) {
@@ -764,14 +757,14 @@ function mount(root, context) {
     else
       refreshStatus();
   });
-  const initial = context.params?.addHost;
+  const initial = context.params;
   load().then(() => {
     if (!disposed && initial)
-      receiveHost(initial);
+      applyParams(initial);
   });
   return () => {
     disposed = true;
-    pendingHost = null;
+    pending = null;
     offAction?.();
     offVisibility?.();
     stopLogs();

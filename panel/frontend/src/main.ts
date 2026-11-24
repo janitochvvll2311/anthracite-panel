@@ -1880,7 +1880,12 @@ manager.addEventListener("pointerdown", (event) => {
   if (event.target === manager) closeManager();
 });
 modalClose.addEventListener("click", () => closeModal());
-modalElement.addEventListener("close", () => closeModal());
+modalElement.addEventListener("close", () => {
+  // A `close()` schedules its event; a modal opened before it is delivered
+  // would be closed by the stale event. Only clean up the closing dialog.
+  if (modalElement.open || !modalState) return;
+  closeModal();
+});
 modalElement.addEventListener("pointerdown", (event) => {
   if (event.target === modalElement) closeModal();
 });

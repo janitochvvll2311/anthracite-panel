@@ -99,6 +99,12 @@ tag = "add-host"
 target = "proxy-host-modal"
 
 [[slot.actions]]
+label = "Add upstream"
+icon = "link"
+tag = "add-upstream"
+target = "proxy-upstream-modal"
+
+[[slot.actions]]
 label = "Apply draft"
 icon = "refresh"
 tag = "apply"
@@ -106,9 +112,33 @@ action = "apply"
 
 [[slot]]
 id = "panel.modal"
-label = "Add host"
-order = 34
+label = "Host"
+order = 33
 tag = "proxy-host-modal"
+module = "web/proxy-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[slot]]
+id = "panel.modal"
+label = "Upstream"
+order = 34
+tag = "proxy-upstream-modal"
+module = "web/proxy-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[slot]]
+id = "panel.modal"
+label = "Route"
+order = 35
+tag = "proxy-route-modal"
+module = "web/proxy-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[slot]]
+id = "panel.modal"
+label = "Listener"
+order = 36
+tag = "proxy-listener-modal"
 module = "web/proxy-modal.js"
 sha256 = "{{modal_sha256}}"
 

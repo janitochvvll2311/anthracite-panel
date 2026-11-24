@@ -37,6 +37,10 @@ export class Fabs {
     return fab.getByTestId(TESTID.fabItem);
   }
 
+  item(fab: Locator, tag: string): Locator {
+    return withAttr(this.menuItems(fab), "data-tag", tag);
+  }
+
   async openMenu(tag: string): Promise<Locator> {
     const fab = this.fab(tag);
     await this.trigger(fab).click();
