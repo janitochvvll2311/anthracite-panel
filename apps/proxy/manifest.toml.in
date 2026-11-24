@@ -1,0 +1,129 @@
+manifest_version = 4
+
+[app]
+id = "org.anthracite.proxy"
+namespace = "anthracite:proxy"
+name = "{{app_name}}"
+version = "0.7.0"
+summary = "{{app_summary}}"
+license = "Apache-2.0"
+icon = "network"
+
+[service]
+path = "{{service_path}}"
+sha256 = "{{sha256}}"
+class = "{{service_class}}"
+argv = {{service_argv}}
+listen = ["tcp:8080", "tcp:8443"]
+egress = ["any"]
+
+[[export]]
+interface = "anthracite:proxy/admin@1.0.0"
+
+[limits]
+# The access log is long-lived and lossy by design; this is the engine's
+# per-connection budget, not the proxy's own queue.
+bytes-total = 268435456
+bytes-per-sec = 2097152
+
+[[route]]
+method = "GET"
+path = "/config"
+call = "anthracite:proxy/admin@1.0.0#snapshot"
+
+[[route]]
+method = "PUT"
+path = "/config"
+call = "anthracite:proxy/admin@1.0.0#apply"
+
+[[route]]
+method = "GET"
+path = "/status"
+call = "anthracite:proxy/admin@1.0.0#status"
+
+[[route]]
+method = "GET"
+path = "/logs"
+call = "anthracite:proxy/admin@1.0.0#logs"
+stream = true
+events = true
+
+[[route]]
+method = "GET"
+path = "/certificates"
+call = "anthracite:proxy/admin@1.0.0#certificates"
+
+[[route]]
+method = "POST"
+path = "/certificates/reload"
+call = "anthracite:proxy/admin@1.0.0#reload-certificates"
+
+[[route]]
+method = "GET"
+path = "/hosts"
+call = "anthracite:proxy/admin@1.0.0#hosts"
+
+[[route]]
+method = "GET"
+path = "/routes"
+call = "anthracite:proxy/admin@1.0.0#routes"
+
+[[route]]
+method = "POST"
+path = "/upstreams/test"
+call = "anthracite:proxy/admin@1.0.0#test-upstream"
+
+[[slot]]
+id = "panel.view"
+label = "Proxy"
+icon = "network"
+order = 24
+tag = "anth-proxy"
+module = "web/proxy.js"
+sha256 = "{{module_sha256}}"
+
+[[slot]]
+id = "panel.fab"
+label = "Proxy"
+icon = "plus"
+order = 24
+tag = "proxy-fab"
+view = "anth-proxy"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Add host"
+icon = "plus"
+tag = "add-host"
+target = "proxy-host-modal"
+
+[[slot.actions]]
+label = "Apply draft"
+icon = "refresh"
+tag = "apply"
+action = "apply"
+
+[[slot]]
+id = "panel.modal"
+label = "Add host"
+order = 34
+tag = "proxy-host-modal"
+module = "web/proxy-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[cli]]
+call = "anthracite:proxy/admin@1.0.0#status"
+verb = "status"
+
+[[cli]]
+call = "anthracite:proxy/admin@1.0.0#hosts"
+verb = "hosts"
+
+[[cli]]
+call = "anthracite:proxy/admin@1.0.0#routes"
+verb = "routes"
+
+[[cli]]
+call = "anthracite:proxy/admin@1.0.0#reload-certificates"
+verb = "reload"

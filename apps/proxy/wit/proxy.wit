@@ -1,0 +1,96 @@
+package anthracite:proxy@1.0.0;
+
+interface admin {
+    use anth:error/kinds@1.0.0.{error};
+
+    record header {
+        name: string,
+        value: string,
+    }
+
+    record route {
+        id: string,
+        match: string,
+        upstream: option<string>,
+        strip-prefix: bool,
+        websocket: bool,
+        redirect: option<string>,
+        headers: list<header>,
+        body-limit: option<u64>,
+    }
+
+    record host {
+        id: string,
+        names: list<string>,
+        certificate: option<string>,
+        acme: bool,
+        redirect-https: bool,
+        hsts: bool,
+        routes: list<route>,
+    }
+
+    record upstream {
+        id: string,
+        url: string,
+        connect-timeout-ms: u32,
+        read-timeout-ms: u32,
+        tls-verify: bool,
+    }
+
+    record listener {
+        id: string,
+        bind: string,
+        tls: bool,
+        default-host: option<string>,
+        forwarded: bool,
+    }
+
+    record config {
+        version: u64,
+        listeners: list<listener>,
+        upstreams: list<upstream>,
+        hosts: list<host>,
+    }
+
+    record proxy-status {
+        running: bool,
+        listeners: list<string>,
+        last-reload: u64,
+        last-error: option<string>,
+        version: u64,
+        dropped: u64,
+    }
+
+    record access-event {
+        at: u64,
+        host: string,
+        method: string,
+        path: string,
+        status: u16,
+        bytes: u64,
+        duration-ms: u64,
+        upstream: string,
+    }
+
+    record upstream-check {
+        id: string,
+        ok: bool,
+        status: option<u16>,
+        latency-ms: u64,
+        error: option<string>,
+    }
+
+    snapshot: func() -> config;
+    apply: func(config: config, expected-version: u64) -> result<config, error>;
+    status: func() -> proxy-status;
+    logs: func() -> result<stream<access-event>, error>;
+    certificates: func() -> list<string>;
+    reload-certificates: func() -> result<proxy-status, error>;
+    hosts: func() -> list<host>;
+    routes: func() -> list<route>;
+    test-upstream: func(id: string) -> result<upstream-check, error>;
+}
+
+world app {
+    export admin;
+}
