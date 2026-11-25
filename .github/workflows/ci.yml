@@ -270,6 +270,12 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      - name: Runner environment
+        run: |
+          id
+          findmnt -no TARGET,OPTIONS /tmp || true
+          ls -l /tmp | head -5
+
       # The workspace is checked twice on purpose: once with the features a
       # crate gets by default, and once with the parser the engine enables.
       - name: Lint, default features

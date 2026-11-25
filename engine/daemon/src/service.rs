@@ -769,7 +769,7 @@ fn spawn(service: &Service) -> Result<Child, Error> {
     unsafe {
         command.pre_exec(move || {
             if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
+                return Err(prefixed("setsid", std::io::Error::last_os_error()));
             }
             // The prctl knobs are Linux-only; elsewhere the child keeps the
             // process-group and limits below and the gap is documented.
@@ -777,29 +777,30 @@ fn spawn(service: &Service) -> Result<Child, Error> {
             {
                 // No setuid/setgid/file capabilities through a later exec.
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
+                    return Err(prefixed("prctl", std::io::Error::last_os_error()));
                 }
                 // Die with the engine; do not leave a service behind.
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
+                    return Err(prefixed("prctl", std::io::Error::last_os_error()));
                 }
                 // No core dump, and no ptrace of this service by an unrelated
                 // process. It also makes `/proc/<pid>` root-owned, so a service
                 // must not rely on reading another process's proc files.
                 if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
+                    return Err(prefixed("prctl", std::io::Error::last_os_error()));
                 }
             }
             libc::umask(0o077);
-            set_limit(libc::RLIMIT_CORE, 0)?;
-            set_limit(libc::RLIMIT_NOFILE, NOFILE_LIMIT)?;
+            set_limit(libc::RLIMIT_CORE, 0).map_err(|error| prefixed("limits", error))?;
+            set_limit(libc::RLIMIT_NOFILE, NOFILE_LIMIT)
+                .map_err(|error| prefixed("limits", error))?;
             let nproc = match class {
                 ServiceClass::Exec | ServiceClass::Host => NPROC_LIMIT_EXEC,
                 ServiceClass::Socket | ServiceClass::Device | ServiceClass::Admin => {
                     NPROC_LIMIT_SERVICE
                 }
             };
-            set_limit(libc::RLIMIT_NPROC, nproc)?;
+            set_limit(libc::RLIMIT_NPROC, nproc).map_err(|error| prefixed("limits", error))?;
             // L1: the capability bounding set first (needs the engine's
             // CAP_SETPCAP), then the uid, then the filesystem view. The
             // ruleset was built before the fork so a root the service cannot
@@ -823,8 +824,25 @@ fn spawn(service: &Service) -> Result<Child, Error> {
         libc::close(ruleset);
     }
     spawned.map_err(|error| {
+        let error = prefixed("exec", error);
+        // The child cannot report why the kernel refused it, so include the
+        // facts an operator needs to tell mode, ownership and policy apart.
+        let staged = std::fs::metadata(&service.binary)
+            .map(|meta| {
+                use std::os::unix::fs::MetadataExt;
+                use std::os::unix::fs::PermissionsExt;
+                format!(
+                    "mode={:o} uid={} gid={}",
+                    meta.permissions().mode(),
+                    meta.uid(),
+                    meta.gid()
+                )
+            })
+            .unwrap_or_else(|error| format!("metadata: {error}"));
+        // SAFETY: `geteuid` has no preconditions.
+        let euid = unsafe { libc::geteuid() };
         Error::denied(format!(
-            "sandbox: starting `{}`: {error}",
+            "sandbox: starting `{}` ({staged}, euid={euid}): {error}",
             service.binary.display()
         ))
     })
