@@ -9,7 +9,7 @@ description = "The engine's HTTP surface"
 anth-auth = { path = "../auth" }
 anth-compose = { path = "../compose" }
 anth-contract = { path = "../contract" }
-base64 = "0.22"
+base64 = "0.23"
 futures-core = "0.3"
 futures-util = "0.3"
 http-body = "1"
