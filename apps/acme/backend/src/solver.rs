@@ -126,12 +126,11 @@ pub fn write_http_token(
             .map_err(|error| Error::unavailable(format!("writing {}: {error}", temp.display())))?;
         file.sync_all()
             .map_err(|error| Error::unavailable(format!("syncing {}: {error}", temp.display())))?;
+        // fchmod on the open handle: a path-based chmod can follow a symlink
+        // planted by a peer in this 0770 directory.
+        file.set_permissions(std::fs::Permissions::from_mode(0o640))
+            .map_err(|error| Error::unavailable(format!("securing {}: {error}", temp.display())))?;
     }
-    // The service runs with umask 077, which masks the `mode` above down to
-    // 0600. The proxy is another uid and needs the group bit, so chmod after
-    // writing instead of trusting the creation mode.
-    std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o640))
-        .map_err(|error| Error::unavailable(format!("securing {}: {error}", temp.display())))?;
     std::fs::rename(&temp, &path)
         .map_err(|error| Error::unavailable(format!("publishing {}: {error}", path.display())))?;
     Ok(path)
