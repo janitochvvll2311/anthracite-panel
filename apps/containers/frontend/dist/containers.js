@@ -357,6 +357,7 @@ function mount(root, context) {
   let pending = null;
   let logBuffer = "";
   let statSample = null;
+  let lastSignature = "";
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "cn-status bad" : "cn-status";
@@ -581,7 +582,11 @@ function mount(root, context) {
         stopDetailStreams();
       }
       setStatus("");
-      render();
+      const signature = `${selected}|${JSON.stringify(containers)}`;
+      if (signature !== lastSignature) {
+        lastSignature = signature;
+        render();
+      }
     } catch (error) {
       setStatus(String(error), true);
     }
@@ -612,6 +617,7 @@ function mount(root, context) {
   }
   function switchTab(next) {
     tab = next;
+    lastSignature = "";
     box.querySelector("[data-containers]").hidden = next !== "containers";
     detail.hidden = next !== "containers" || !selected;
     for (const name of ["images", "volumes", "networks"]) {
@@ -632,6 +638,7 @@ function mount(root, context) {
     stopDetailStreams();
     logBuffer = "";
     statSample = null;
+    lastSignature = `${selected}|${JSON.stringify(containers)}`;
     render();
     startStats();
   }

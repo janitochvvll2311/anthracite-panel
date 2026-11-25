@@ -1708,7 +1708,12 @@ struct GrantBody {
 /// groups, so a root:docker 0660 socket fails unless the operator grants that
 /// gid. Refusing at approval names the command instead of leaving a silent
 /// EACCES at runtime.
-fn check_socket_access(roots: &[String], gid: u32, owner: Option<u32>) -> Result<(), Error> {
+fn check_socket_access(
+    roots: &[String],
+    gid: u32,
+    owner: Option<u32>,
+    service_uid: u32,
+) -> Result<(), Error> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let roots = anth_contract::manifest::parse_roots(roots)?;
     for root in &roots {
@@ -1736,6 +1741,35 @@ fn check_socket_access(roots: &[String], gid: u32, owner: Option<u32>) -> Result
                 metadata.gid()
             )));
         }
+        check_traversal(std::path::Path::new(path), gid, service_uid)?;
+    }
+    Ok(())
+}
+
+/// `connect(2)` needs search permission on every ancestor. A world-writable
+/// socket under a 0700 directory still fails, which is the rootless Podman
+/// socket read from a root engine.
+fn check_traversal(path: &std::path::Path, gid: u32, uid: u32) -> Result<(), Error> {
+    use std::os::unix::fs::MetadataExt;
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if let Ok(metadata) = std::fs::metadata(dir) {
+            let mode = metadata.mode() & 0o777;
+            let ok = uid == 0
+                || (metadata.uid() == uid && (mode & 0o100) != 0)
+                || (metadata.gid() == gid && (mode & 0o010) != 0)
+                || (mode & 0o001) != 0;
+            if !ok {
+                return Err(Error::denied(format!(
+                    "the service uid {uid} cannot traverse {} (mode {mode:o}). \
+                     Grant search with chgrp {gid} {} && chmod 0710 {}, then approve again.",
+                    dir.display(),
+                    dir.display(),
+                    dir.display()
+                )));
+            }
+        }
+        current = dir.parent();
     }
     Ok(())
 }
@@ -1767,7 +1801,12 @@ async fn approve_app(
         let gid = unsafe { libc::getegid() };
         let euid = unsafe { libc::geteuid() };
         let owner = if euid == 0 { None } else { Some(euid) };
-        if let Err(error) = check_socket_access(&service.roots, gid, owner) {
+        let service_uid = if euid == 0 {
+            state.service_uid_of(&id).unwrap_or(0)
+        } else {
+            euid
+        };
+        if let Err(error) = check_socket_access(&service.roots, gid, owner, service_uid) {
             return Err(audit_or_error(
                 audit_failure(
                     apps,

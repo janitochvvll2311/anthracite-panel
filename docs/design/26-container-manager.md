@@ -181,7 +181,8 @@ host. The WIT create record cannot express a bind mount, privileged mode or a
 host namespace; unknown fields are rejected, and `network = "host"` or
 `container:*` is refused explicitly. Exec is a service-owned session over the
 hijacked Engine stream (decision 0010). Approval refuses a socket root the
-service cannot connect to and names the `chgrp`/`chmod` command; a missing
+service cannot connect to (including a non-traversable ancestor) and names the
+`chgrp`/`chmod` command; a missing
 socket is skipped so the app starts and reports the degraded runtime. The
 always-on test is a fixture Engine API; Docker and rootless Podman are manual
 QA rows.

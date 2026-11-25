@@ -138,6 +138,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let pending: (() => Promise<void>) | null = null;
   let logBuffer = "";
   let statSample: Sample | null = null;
+  let lastSignature = "";
 
   const setStatus = (message: string, bad = false): void => {
     status.textContent = message ?? "";
@@ -376,7 +377,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
         stopDetailStreams();
       }
       setStatus("");
-      render();
+      // Rebuilding the detail on every poll detaches the button under the
+      // pointer and the log pane; only render when the data changed.
+      const signature = `${selected}|${JSON.stringify(containers)}`;
+      if (signature !== lastSignature) {
+        lastSignature = signature;
+        render();
+      }
     } catch (error) {
       setStatus(String(error), true);
     }
@@ -411,6 +418,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   function switchTab(next: Tab): void {
     tab = next;
+    lastSignature = "";
     (box.querySelector("[data-containers]") as HTMLElement).hidden =
       next !== "containers";
     (detail as HTMLElement).hidden = next !== "containers" || !selected;
@@ -430,6 +438,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
     stopDetailStreams();
     logBuffer = "";
     statSample = null;
+    lastSignature = `${selected}|${JSON.stringify(containers)}`;
     render();
     startStats();
   }

@@ -38,8 +38,10 @@ roots = ["/var/run/docker.sock"]
   ```
 
   Approval refuses a socket root the service could not connect to and names
-  that command. A world-connectable socket also works, but is not recommended
-  for a root-equivalent endpoint.
+  that command. It also checks search permission on every ancestor: a
+  world-writable socket under a 0700 directory is refused, which is the
+  rootless Podman socket seen from a root engine. A world-connectable socket
+  also works, but is not recommended for a root-equivalent endpoint.
 
 ## Runtime
 

@@ -3002,11 +3002,17 @@ fn a_runtime_socket_needs_the_service_gid_or_world_write() {
     let uid = metadata.uid();
     let root = path.to_string_lossy().into_owned();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
-    assert!(check_socket_access(std::slice::from_ref(&root), gid, None).is_err());
-    assert!(check_socket_access(std::slice::from_ref(&root), gid, Some(uid)).is_ok());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, None, 0).is_err());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, Some(uid), uid).is_ok());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("mode");
-    assert!(check_socket_access(&[format!("{root}:ro")], gid, None).is_ok());
+    assert!(check_socket_access(&[format!("{root}:ro")], gid, None, 0).is_ok());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).expect("mode");
-    assert!(check_socket_access(std::slice::from_ref(&root), gid, None).is_ok());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, None, 0).is_ok());
+    // A world-writable socket under a directory the service cannot search.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("dir mode");
+    let stranger = uid.wrapping_add(1);
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, None, stranger).is_err());
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("dir mode");
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, None, stranger).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }
