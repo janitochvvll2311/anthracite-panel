@@ -1,0 +1,37 @@
+[package]
+name = "store-service"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Signed catalogue and digest-pinned bundle cache for the Anthracite store"
+
+[[bin]]
+name = "store-service"
+path = "src/main.rs"
+
+[dependencies]
+anth-contract = { path = "../../../engine/contract" }
+anth-service = { path = "../../../sdk/rust/service" }
+base64 = "0.22"
+bytes = "1"
+ed25519-dalek = "2"
+futures-util = "0.3"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "client", "http1", "http2"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "http2", "webpki-roots"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs", "signal"] }
+tower-service = "0.3"
+url = "2"
+webpki-roots = "1"
+
+[dev-dependencies]
+ed25519-dalek = "2"
+
+[workspace]

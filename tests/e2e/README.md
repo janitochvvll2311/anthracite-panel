@@ -30,6 +30,10 @@ to `.auth/operator.json` and exposes `panel` (already reconciled) and `login`
 (the public gate). `auth.spec.ts` opts out of the stored session with
 `test.use({ storageState: { cookies: [], origins: [] } })`.
 
+`containers.spec.ts` and `store.spec.ts` follow the same pattern and are gated by
+the fixture variables above; the store manager test deletes the signer key first
+so the handoff prompt is exercised on every run.
+
 `proxy.spec.ts` runs only when the composition carries `org.anthracite.proxy`
 (the standard demo does not until the v0.7 release wiring) and is skipped with
 a message otherwise. To exercise it, build and install the bundle, approve it
@@ -74,6 +78,10 @@ and pass that one: the suite does not rotate credentials.
 | `ANTH_PANEL_OPERATOR` | Operator name. Default `operator`. |
 | `ANTH_PANEL_PASSWORD` | Required. The operator password the panel accepts. |
 | `ANTH_CHROMIUM` | Chromium path. Default `/usr/bin/chromium` when present. |
+| `ANTH_CONTAINERS_FIXTURE` | Set to `1` to run the Containers spec against `scripts/containers-fixture.ts`. |
+| `ANTH_STORE_FIXTURE` | Set to `1` to run the Store specs against `scripts/store-fixture.sh`. |
+| `ANTH_STORE_PUBLIC_KEY` | The fixture catalogue signer public key (64 hex); the Manager handoff pastes it. |
+| `ANTH_STORE_SIGNER` | The signer fingerprint; the spec deletes it from the keyring first so the prompt is deterministic. |
 
 `bun install` does not download a browser. If the host has no system Chromium
 and `ANTH_CHROMIUM` is unset, install Playwright's once:

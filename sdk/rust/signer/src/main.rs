@@ -8,15 +8,17 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anth_contract::Error;
-use anth_signer::{generate_key, key_info, sign};
+use anth_signer::{generate_key, key_info, sign, sign_file};
 
 const USAGE: &str = "\
 usage: anth-sign <dir> --key <path>
+       anth-sign file <path> --key <path>
        anth-sign keygen --out <path>
        anth-sign public-key --key <path>
 
 commands:
   <dir>                 write <dir>/manifest.sig over manifest.toml and wit/**
+  file <path>           write <path>.sig over the exact bytes
   keygen                write a new Ed25519 private key (mode 0600)
   public-key            print the public half of a private key, no signature
 
@@ -28,6 +30,7 @@ options:
 #[derive(Debug)]
 enum Command {
     Sign { dir: PathBuf, key: PathBuf },
+    File { path: PathBuf, key: PathBuf },
     Keygen { out: PathBuf },
     PublicKey { key: PathBuf },
 }
@@ -45,6 +48,12 @@ fn main() -> ExitCode {
 
 fn run(command: Command) -> Result<(), Error> {
     match command {
+        Command::File { path, key } => {
+            let public = sign_file(&path, &key)?;
+            println!("signed {}.sig", path.display());
+            println!("public_key\t{}", public.key);
+            println!("fingerprint\t{}", public.fingerprint);
+        }
         Command::Sign { dir, key } => {
             let public = sign(&dir, &key)?;
             println!("signed {}", dir.join("manifest.sig").display());
@@ -87,6 +96,10 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Command, Error> {
     }
     match (positional.as_slice(), key, out) {
         ([command], Some(key), None) if command == "public-key" => Ok(Command::PublicKey { key }),
+        ([command, path], Some(key), None) if command == "file" => Ok(Command::File {
+            path: path.clone(),
+            key,
+        }),
         ([dir], Some(key), None) => Ok(Command::Sign {
             dir: dir.clone(),
             key,

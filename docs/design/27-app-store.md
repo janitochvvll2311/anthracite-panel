@@ -146,11 +146,13 @@ index.json.sig    detached Ed25519 signature over those exact bytes
 - The index may list yanked versions and revoked signers. The UI warns; the
   engine refuses what its keyring or grant refuses.
 
-Minimal index:
+Minimal index (the `sequence` is monotonic per store; the cache refuses a
+replay with a lower value):
 
 ```json
 {
   "schema": 1,
+  "sequence": 1,
   "store": { "id": "org.example.store", "name": "Example Store" },
   "apps": [
     {
@@ -242,3 +244,16 @@ card uses initials.
 - A local source works with no network.
 
 ---
+
+## 11. Implementation notes
+
+The source public key in `{data}/sources.json` is the catalogue trust root
+(decision 0011); the index signature is verified over the exact bytes served and
+a failed refresh keeps the previous cache. A bundle is fully fetched, checked
+against its size and SHA-256 and cached before the first streamed chunk, so a
+mismatch never reaches the manager as a partial file (decision 0012). The store
+has no install verb: the manager discovers the provider through the composition
+surface, downloads with the operator session, POSTs the bundle to the engine and
+requires the engine-computed risk and explicit approval. Sources may be
+`native`, `github` or `local`; the always-on test uses a signed native fixture,
+a GitHub-shaped release API and a local directory.

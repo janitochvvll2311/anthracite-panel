@@ -1,0 +1,120 @@
+manifest_version = 4
+
+[app]
+id = "org.anthracite.store"
+namespace = "anthracite:store"
+name = "{{app_name}}"
+version = "0.7.0"
+summary = "{{app_summary}}"
+license = "Apache-2.0"
+icon = "store"
+
+[service]
+path = "{{service_path}}"
+sha256 = "{{sha256}}"
+class = "socket"
+argv = {{service_argv}}
+egress = ["any"]
+
+[[export]]
+interface = "anthracite:store/catalog@1.0.0"
+
+[limits]
+# Downloads are capped at 32 MiB by the service; the engine bounds the stream.
+bytes-total = 67108864
+bytes-per-sec = 2097152
+
+[[route]]
+method = "GET"
+path = "/sources"
+call = "anthracite:store/catalog@1.0.0#sources"
+
+[[route]]
+method = "POST"
+path = "/sources/refresh"
+call = "anthracite:store/catalog@1.0.0#refresh"
+
+[[route]]
+method = "GET"
+path = "/search"
+call = "anthracite:store/catalog@1.0.0#search"
+
+[[route]]
+method = "GET"
+path = "/app"
+call = "anthracite:store/catalog@1.0.0#app"
+
+[[route]]
+method = "GET"
+path = "/versions"
+call = "anthracite:store/catalog@1.0.0#versions"
+
+[[route]]
+method = "GET"
+path = "/download"
+call = "anthracite:store/catalog@1.0.0#download"
+stream = true
+
+[[route]]
+method = "POST"
+path = "/updates"
+call = "anthracite:store/catalog@1.0.0#check-updates"
+
+[[slot]]
+id = "panel.view"
+label = "Store"
+icon = "store"
+order = 26
+tag = "anth-store"
+module = "web/store.js"
+sha256 = "{{module_sha256}}"
+
+[[slot]]
+id = "panel.fab"
+label = "Store"
+icon = "refresh"
+order = 26
+tag = "store-fab"
+view = "anth-store"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Refresh catalogues"
+icon = "refresh"
+tag = "refresh"
+action = "refresh"
+
+[[slot.actions]]
+label = "Sources"
+icon = "globe"
+tag = "sources"
+target = "store-sources-modal"
+
+[[slot]]
+id = "panel.modal"
+label = "Store sources"
+order = 42
+tag = "store-sources-modal"
+module = "web/store-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[cli]]
+call = "anthracite:store/catalog@1.0.0#sources"
+verb = "sources"
+
+[[cli]]
+call = "anthracite:store/catalog@1.0.0#search"
+verb = "search"
+
+[[cli]]
+call = "anthracite:store/catalog@1.0.0#app"
+verb = "show"
+
+[[cli]]
+call = "anthracite:store/catalog@1.0.0#versions"
+verb = "versions"
+
+[[cli]]
+call = "anthracite:store/catalog@1.0.0#check-updates"
+verb = "updates"

@@ -1,0 +1,77 @@
+package anthracite:store@1.0.0;
+
+interface catalog {
+    use anth:error/kinds@1.0.0.{error};
+
+    enum channel {
+        stable,
+        beta,
+        nightly,
+    }
+
+    record source {
+        id: string,
+        name: string,
+        kind: string,
+        url: string,
+        trusted: bool,
+        refreshed-at: u64,
+    }
+
+    record app-summary {
+        id: string,
+        name: string,
+        summary: string,
+        publisher: string,
+        categories: list<string>,
+        latest: string,
+    }
+
+    record version {
+        version: string,
+        channel: channel,
+        published-at: u64,
+        sha256: string,
+        size: u64,
+        bundle-url: string,
+        signer: string,
+        yanked: bool,
+    }
+
+    record app-detail {
+        id: string,
+        name: string,
+        summary: string,
+        description: string,
+        publisher: string,
+        license: string,
+        homepage: option<string>,
+        categories: list<string>,
+        versions: list<version>,
+    }
+
+    record installed {
+        id: string,
+        version: string,
+        channel: channel,
+    }
+
+    record update {
+        id: string,
+        installed: string,
+        latest: string,
+        channel: channel,
+    }
+
+    sources: func() -> list<source>;
+    refresh: func(source: string) -> result<source, error>;
+    search: func(query: string, categories: option<list<string>>, limit: u32) -> list<app-summary>;
+    app: func(id: string) -> option<app-detail>;
+    versions: func(id: string) -> list<version>;
+    download: func(id: string, version: string) -> result<stream<list<u8>>, error>;
+    check-updates: func(installed: list<installed>) -> list<update>;
+}
+
+world app {
+    export catalog;
+}
