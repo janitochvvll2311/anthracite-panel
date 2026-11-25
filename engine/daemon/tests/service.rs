@@ -32,9 +32,10 @@ fn fixture() -> PathBuf {
         .expect("target directory")
         .join("examples")
         .join("echo_service");
-    if !path.exists() {
-        // `cargo test --workspace` builds examples; a narrow `--test service`
-        // does not, so build the one this test needs instead of failing oddly.
+    // Always let cargo decide whether the example is current: a stale binary
+    // would hide changes such as the `status` fields this suite asserts.
+    static BUILD: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    BUILD.get_or_init(|| {
         let status = std::process::Command::new(
             std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()),
         )
@@ -43,7 +44,7 @@ fn fixture() -> PathBuf {
         .status()
         .expect("build the service fixture");
         assert!(status.success(), "the service fixture did not build");
-    }
+    });
     path
 }
 
@@ -69,6 +70,33 @@ fn launch(state: &Path, extra: &[&str], start_timeout: Duration) -> ServiceLaunc
         exports,
         start_timeout,
     }
+}
+
+#[tokio::test]
+async fn a_root_engine_drops_the_supplementary_groups() {
+    if !anth_engine::sandbox::is_root() {
+        eprintln!("skipping: an unprivileged engine keeps its groups");
+        return;
+    }
+    let state = scratch("groups");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let mut spec = launch(&state, &[], Duration::from_millis(500));
+    // /proc is outside the sandbox by default; the status probe needs the file.
+    spec.roots = vec![Root {
+        path: "/proc".to_string(),
+        read_only: true,
+    }];
+    services.start(spec).await.expect("start");
+    let status = services
+        .call(APP, INTERFACE, "status", json!({}))
+        .await
+        .expect("status");
+    assert_eq!(
+        status["Groups"], "",
+        "the service inherited supplementary groups: {status}"
+    );
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
 }
 
 #[tokio::test]

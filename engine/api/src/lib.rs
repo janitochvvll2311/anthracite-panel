@@ -1704,10 +1704,11 @@ struct GrantBody {
 }
 
 /// A service that declares a runtime socket must be able to connect to it as
-/// its own uid/gid. The service gets the engine gid and no supplementary
-/// groups, so a root:docker 0660 socket fails unless the operator grants that
-/// gid. Refusing at approval names the command instead of leaving a silent
-/// EACCES at runtime.
+/// its own uid/gid. With a root engine the service gets the engine gid and no
+/// supplementary groups; an unprivileged engine keeps its groups, which this
+/// check accepts. A root:docker 0660 socket therefore fails from a root engine
+/// unless the operator grants that gid, and approval names the command instead
+/// of leaving a silent EACCES at runtime.
 fn check_socket_access(
     roots: &[String],
     gid: u32,

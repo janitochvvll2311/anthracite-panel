@@ -3006,12 +3006,35 @@ fn a_runtime_socket_needs_the_service_gid_or_world_write() {
     assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], Some(uid), uid).is_ok());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("mode");
     assert!(check_socket_access(&[format!("{root}:ro")], gid, &[], None, 0).is_ok());
+    // An unprivileged engine reaches the socket through one of its groups, not
+    // the engine gid.
+    let other_gid = gid.wrapping_add(1);
+    assert!(
+        check_socket_access(std::slice::from_ref(&root), other_gid, &[gid], None, 0).is_ok(),
+        "a supplementary group on the socket"
+    );
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).expect("mode");
     assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], None, 0).is_ok());
     // A world-writable socket under a directory the service cannot search.
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("dir mode");
     let stranger = uid.wrapping_add(1);
     assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], None, stranger).is_err());
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o710)).expect("dir mode");
+    let dir_gid = std::fs::metadata(&dir).expect("dir").gid();
+    assert!(
+        check_socket_access(std::slice::from_ref(&root), other_gid, &[], None, stranger).is_err()
+    );
+    assert!(
+        check_socket_access(
+            std::slice::from_ref(&root),
+            other_gid,
+            &[dir_gid],
+            None,
+            stranger
+        )
+        .is_ok(),
+        "a supplementary group on an ancestor"
+    );
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("dir mode");
     assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], None, stranger).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
