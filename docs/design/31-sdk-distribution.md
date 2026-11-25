@@ -28,6 +28,7 @@ bunx @anth-panel/cli app new org.example.notes --lang bun
 | `anth-guest` | crates.io | wasm apps in Rust | yes |
 | `anth-service` | crates.io | native services in Rust | yes |
 | `anth-client` | crates.io | HTTP/CLI clients in Rust | yes |
+| `anth-error` | crates.io | error kind and envelope shared by services and bundles | yes |
 | `anth-bundle` | crates.io | manifest/WIT/signature/zip primitives | yes |
 | `@anth-panel/panel` | npm | app UI in Bun/browser | yes |
 | `@anth-panel/client` | npm | transport and generic client | yes |
@@ -40,12 +41,19 @@ bunx @anth-panel/cli app new org.example.notes --lang bun
 The owner is **`anth-panel`**: crates.io ownership and the npm scope
 `@anth-panel`.
 
+The workspace packages are still named `@anthracite/panel` and
+`@anthracite/client` with `private: true`. They are the same artifacts as
+`@anth-panel/panel` and `@anth-panel/client`; the rename happens in the npm phase,
+before the first publish.
+
 ### What stays internal
 
 `anth-api`, `anth-engine`, `anth-runtime`, `anth-compose`, the full
-`anth-contract`, and `anth-panel` (Rust) are not published. They encode the
-engine's authority and its implementation, not a contract for app authors. The
-`system` tier and the manifest verification remain the engine's job.
+`anth-contract`, and `anth-panel` (Rust) are not published: they encode the
+engine's authority and its implementation, not a contract for app authors.
+`anth-error` is the exception: it is a small public crate extracted from
+`anth-contract` and re-exported by it. The `system` tier and the manifest
+verification remain the engine's job.
 
 ## 3. One CLI, two entry points
 
@@ -104,9 +112,17 @@ file.
 ## 5. Shared bundle code: `anth-bundle`
 
 Manifest parsing, the canonical `manifest.sig` message, WIT hashing, bundle
-reading and the digest rules live in `anth-bundle`. The engine, `anth-sign`,
-`anth-conformance` and `cargo-anth` depend on it, so a signature produced by the
-SDK is the one the engine verifies.
+reading and the digest rules live in `anth-bundle`, which lives in the engine
+tree at `engine/bundle` and is published from there. This is what lets the
+engine depend on it without breaking the rule that forbids `engine/* -> sdk`
+([§10.1](10-workspace.md#101-the-edges-we-forbid)); `anth-sign`,
+`anth-conformance` and `cargo-anth` depend on the same crate, so a signature
+produced by the SDK is the one the engine verifies.
+
+The error kind and envelope used by a service move to `anth-error` in
+`engine/error`, also published. `anth-service` depends on `anth-error`, not on
+the private `anth-contract`, so it can be published without exposing the engine
+contract.
 
 The extraction is a refactor of `engine/compose` and must preserve the bytes:
 the signed message is a compatibility boundary, not an implementation detail.
@@ -159,5 +175,5 @@ A phase is done when:
    result;
 4. the docs show the exact commands and the compatibility matrix.
 
-The phases are in [§29](29-v0.7-plan.md)'s successor plan; the implementation
-order is baseline, CLI, Rust crates, npm packages, docs, publish.
+The implementation order is baseline, CLI, Rust crates, npm packages, docs and
+publish; the phase plan lands with the v0.8.0 plan.

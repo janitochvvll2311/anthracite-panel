@@ -10,7 +10,7 @@ What is the public SDK surface for third-party Anthracite apps?
 
 ## Decision
 
-Publish anth-guest, anth-service, anth-client, anth-bundle and cargo-anth on crates.io, and @anth-panel/panel, @anth-panel/client, @anth-panel/wit, @anth-panel/cli, @anth-panel/create-app and @anth-panel/bun-plugin on npm. Keep anth-api, anth-engine, anth-runtime, anth-compose, the full anth-contract and the Rust anth-panel private.
+Publish anth-error, anth-guest, anth-service, anth-client, anth-bundle and cargo-anth on crates.io, and @anth-panel/panel, @anth-panel/client, @anth-panel/wit, @anth-panel/cli, @anth-panel/create-app and @anth-panel/bun-plugin on npm. Keep anth-api, anth-engine, anth-runtime, anth-compose, the full anth-contract and the Rust anth-panel private. anth-error is the small exception extracted from anth-contract; anth-bundle lives in engine/bundle so the engine can depend on it without an engine -> sdk edge.
 
 ## Rationale
 

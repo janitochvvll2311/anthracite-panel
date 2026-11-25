@@ -10,7 +10,7 @@ What code is shared between the engine and the SDK tools?
 
 ## Decision
 
-Extract manifest parsing, the canonical manifest.sig message, WIT hashing, bundle reading and digest rules into anth-bundle. The engine, anth-sign, anth-conformance and cargo-anth depend on it.
+Extract manifest parsing, the canonical manifest.sig message, WIT hashing, bundle reading and digest rules into anth-bundle. It lives in engine/bundle and is published there, so the engine can depend on it without violating the engine -> sdk prohibition. The error kind and envelope move to the small public anth-error crate in engine/error, re-exported by anth-contract, so anth-service can be published without exposing the full contract. The engine, anth-sign, anth-conformance and cargo-anth depend on anth-bundle.
 
 ## Rationale
 
