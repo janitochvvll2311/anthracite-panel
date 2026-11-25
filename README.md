@@ -1,5 +1,6 @@
 # Anthracite
 
+[![ci](https://github.com/janitochvvll2311/anthracite-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/janitochvvll2311/anthracite-panel/actions/workflows/ci.yml)
 [![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/janitochvvll2311)
 
 **A headless engine that composes apps; a panel is the application that hosts
