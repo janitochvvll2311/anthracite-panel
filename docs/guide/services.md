@@ -140,6 +140,12 @@ and socket directory are owned by it, so the engine state and another app's data
 stay unreadable even with a broad root. Without root, Landlock still applies but
 the uid layer does not; approve broad roots accordingly.
 
+The view has no ELF loader and no system libraries, so a service binary must be
+self-contained: link it statically (`x86_64-unknown-linux-musl`, or
+`-C target-feature=+crt-static`). A dynamically linked binary is refused at
+`exec` with `sandbox: starting ...: exec: Permission denied`; the release
+binaries are static for the same reason.
+
 A privileged listener (`< 1024`) works only when the engine holds
 `CAP_NET_BIND_SERVICE` (root, or the capability in a container). Every other
 capability is dropped; a declared listener without the capability is a

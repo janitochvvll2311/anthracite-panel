@@ -292,16 +292,17 @@ fn service_app(dir: &Path) -> (AppId, PathBuf) {
         .and_then(Path::parent)
         .expect("target directory")
         .join("examples/echo_service");
-    if !fixture.exists() {
-        let status = std::process::Command::new(
-            std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()),
-        )
-        .args(["build", "--example", "echo_service", "--manifest-path"])
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
-        .status()
-        .expect("build the service fixture");
-        assert!(status.success(), "the service fixture did not build");
-    }
+    // Build the fixture statically on purpose: the Landlock view has no ELF
+    // loader or system libraries, so a dynamically linked service cannot exec.
+    // The release binaries are static for the same reason.
+    let status =
+        std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+            .args(["rustc", "--example", "echo_service", "--manifest-path"])
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+            .args(["--", "-C", "target-feature=+crt-static"])
+            .status()
+            .expect("build the service fixture");
+    assert!(status.success(), "the service fixture did not build");
     let binary = app_dir.join("bin/service");
     fs::copy(&fixture, &binary).expect("copy fixture");
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).expect("chmod");

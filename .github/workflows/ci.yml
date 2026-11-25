@@ -77,16 +77,6 @@ jobs:
       - name: Format
         run: cargo fmt --manifest-path apps/Cargo.toml --all --check
 
-      - name: Exec probe
-        run: |
-          printf '#!/bin/sh\necho script-ok\n' > /tmp/anth-probe.sh
-          chmod 0700 /tmp/anth-probe.sh
-          /tmp/anth-probe.sh || echo "PROBE_SCRIPT_FAILED"
-          cp /bin/true /tmp/anth-probe-bin
-          chmod 0700 /tmp/anth-probe-bin
-          /tmp/anth-probe-bin && echo "PROBE_BIN_OK" || echo "PROBE_BIN_FAILED"
-          mount | grep ' /tmp ' || echo "tmp is not its own mount"
-
       # No `wit/deps` is committed: hello's build script mirrors the SDK
       # catalog, which is what proves the guest facade injects it.
       - name: Build and verify the committed component
@@ -279,20 +269,6 @@ jobs:
 
       - name: Format
         run: cargo fmt --all --check
-
-      - name: Runner environment
-        run: |
-          id
-          findmnt -no TARGET,OPTIONS /tmp || true
-          ls -l /tmp | head -5
-          mount | grep ' /tmp ' || echo "tmp is not its own mount"
-          df -T /tmp || true
-          printf '#!/bin/sh\necho script-ok\n' > /tmp/anth-probe.sh
-          chmod 0700 /tmp/anth-probe.sh
-          /tmp/anth-probe.sh || echo "PROBE_SCRIPT_FAILED"
-          cp /bin/true /tmp/anth-probe-bin
-          chmod 0700 /tmp/anth-probe-bin
-          /tmp/anth-probe-bin && echo "PROBE_BIN_OK" || echo "PROBE_BIN_FAILED"
 
       # The workspace is checked twice on purpose: once with the features a
       # crate gets by default, and once with the parser the engine enables.
