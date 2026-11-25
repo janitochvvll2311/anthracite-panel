@@ -116,10 +116,9 @@ The visual grammar every official view follows:
   ids, paths and fingerprints in `ui-monospace` at 12 px. No external fonts.
 - **Colour.** The tokens above; the accent marks focus, selection and links,
   never decoration. Status is `good` / `warn` / `danger`; a neutral badge uses
-  `--muted`. `apps/proxy` is fully tokenised and is the example to copy. The
-  older modules (`certs`, `firewall`, `accounts`) still carry literal hex values
-  from before the frame mirrored the palette; new work uses the tokens, and
-  migrating those modules is pending.
+  `--muted`. `apps/proxy` is fully tokenised and is the example to copy; every
+  other module still carries literal hex values from before the frame mirrored
+  the palette. New work uses the tokens, and migrating those modules is pending.
 - **Spacing and shape.** 4/8/12/14 px gaps, 1 px borders in `--line`, radii 7 px
   for controls and 9–12 px for cards. Shadows are the panel's, not a new one.
 - **Buttons.** 12 px, 5–6 px vertical padding, 10–12 px horizontal, radius 7,
