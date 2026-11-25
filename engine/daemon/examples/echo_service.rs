@@ -237,7 +237,10 @@ fn call(body: &[u8]) -> (u16, Vec<u8>) {
             let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
             let mut fields = serde_json::Map::new();
             for line in status.lines() {
-                if line.starts_with("NoNewPrivs:") || line.starts_with("Seccomp:") {
+                if line.starts_with("NoNewPrivs:")
+                    || line.starts_with("Seccomp:")
+                    || line.starts_with("Groups:")
+                {
                     if let Some((key, value)) = line.split_once(':') {
                         fields.insert(
                             key.to_string(),

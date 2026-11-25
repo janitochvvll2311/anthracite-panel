@@ -1,0 +1,103 @@
+package anthracite:containers@1.0.0;
+
+interface runtime {
+    use anth:error/kinds@1.0.0.{error};
+
+    record label {
+        name: string,
+        value: string,
+    }
+
+    record env-var {
+        name: string,
+        value: string,
+    }
+
+    record volume-mount {
+        name: string,
+        path: string,
+    }
+
+    record container {
+        id: string,
+        name: string,
+        image: string,
+        state: string,
+        status: string,
+        health: option<string>,
+        created-at: u64,
+        ports: list<string>,
+        labels: list<label>,
+    }
+
+    record image {
+        id: string,
+        tags: list<string>,
+        size: u64,
+        created-at: u64,
+        digest: option<string>,
+    }
+
+    record volume {
+        name: string,
+        driver: string,
+        labels: list<label>,
+    }
+
+    record network {
+        name: string,
+        driver: string,
+        subnet: option<string>,
+        containers: u32,
+    }
+
+    record create-request {
+        image: string,
+        name: option<string>,
+        command: list<string>,
+        env: list<env-var>,
+        ports: list<string>,
+        volumes: list<volume-mount>,
+        network: option<string>,
+        restart: string,
+        labels: list<label>,
+    }
+
+    record sample {
+        cpu-percent: f64,
+        memory-bytes: u64,
+        memory-limit: u64,
+        net-rx: u64,
+        net-tx: u64,
+        pids: u64,
+    }
+
+    list-containers: func() -> list<container>;
+    inspect: func(id: string) -> option<container>;
+    create: func(request: create-request) -> result<container, error>;
+    start: func(id: string) -> result<bool, error>;
+    stop: func(id: string, timeout-s: u32) -> result<bool, error>;
+    restart: func(id: string, timeout-s: u32) -> result<bool, error>;
+    pause: func(id: string) -> result<bool, error>;
+    unpause: func(id: string) -> result<bool, error>;
+    kill: func(id: string, signal: string) -> result<bool, error>;
+    remove: func(id: string, force: bool) -> result<bool, error>;
+    logs: func(id: string, tail: u32, follow: bool) -> result<stream<list<u8>>, error>;
+    stats: func(id: string) -> result<stream<sample>, error>;
+    exec: func(id: string, command: list<string>, tty: bool, cols: u32, rows: u32) -> result<string, error>;
+    exec-attach: func(session: string) -> result<stream<list<u8>>, error>;
+    exec-write: func(session: string, data: list<u8>) -> result<bool, error>;
+    exec-resize: func(session: string, cols: u32, rows: u32) -> result<bool, error>;
+    exec-close: func(session: string) -> result<bool, error>;
+    list-images: func() -> list<image>;
+    pull: func(reference: string) -> result<stream<list<u8>>, error>;
+    remove-image: func(id: string, force: bool) -> result<bool, error>;
+    list-volumes: func() -> list<volume>;
+    create-volume: func(name: string) -> result<volume, error>;
+    remove-volume: func(name: string, force: bool) -> result<bool, error>;
+    list-networks: func() -> list<network>;
+}
+
+world app {
+    export runtime;
+}

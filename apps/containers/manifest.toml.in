@@ -1,0 +1,209 @@
+manifest_version = 4
+
+[app]
+id = "org.anthracite.containers"
+namespace = "anthracite:containers"
+name = "{{app_name}}"
+version = "0.7.0"
+summary = "{{app_summary}}"
+license = "Apache-2.0"
+icon = "box"
+
+[service]
+path = "{{service_path}}"
+sha256 = "{{sha256}}"
+class = "admin"
+argv = {{service_argv}}
+roots = ["{{runtime}}"]
+
+[[export]]
+interface = "anthracite:containers/runtime@1.0.0"
+
+[limits]
+# Logs and pull are long-lived; the engine bounds each stream.
+bytes-total = 67108864
+bytes-per-sec = 1048576
+
+[[route]]
+method = "GET"
+path = "/containers"
+call = "anthracite:containers/runtime@1.0.0#list-containers"
+
+[[route]]
+method = "GET"
+path = "/container"
+call = "anthracite:containers/runtime@1.0.0#inspect"
+
+[[route]]
+method = "POST"
+path = "/containers"
+call = "anthracite:containers/runtime@1.0.0#create"
+
+[[route]]
+method = "POST"
+path = "/container/start"
+call = "anthracite:containers/runtime@1.0.0#start"
+
+[[route]]
+method = "POST"
+path = "/container/stop"
+call = "anthracite:containers/runtime@1.0.0#stop"
+
+[[route]]
+method = "POST"
+path = "/container/restart"
+call = "anthracite:containers/runtime@1.0.0#restart"
+
+[[route]]
+method = "POST"
+path = "/container/pause"
+call = "anthracite:containers/runtime@1.0.0#pause"
+
+[[route]]
+method = "POST"
+path = "/container/unpause"
+call = "anthracite:containers/runtime@1.0.0#unpause"
+
+[[route]]
+method = "POST"
+path = "/container/kill"
+call = "anthracite:containers/runtime@1.0.0#kill"
+
+[[route]]
+method = "POST"
+path = "/container/remove"
+call = "anthracite:containers/runtime@1.0.0#remove"
+
+[[route]]
+method = "GET"
+path = "/container/logs"
+call = "anthracite:containers/runtime@1.0.0#logs"
+stream = true
+
+[[route]]
+method = "GET"
+path = "/container/stats"
+call = "anthracite:containers/runtime@1.0.0#stats"
+stream = true
+events = true
+
+[[route]]
+method = "POST"
+path = "/container/exec"
+call = "anthracite:containers/runtime@1.0.0#exec"
+
+[[route]]
+method = "GET"
+path = "/container/exec/attach"
+call = "anthracite:containers/runtime@1.0.0#exec-attach"
+stream = true
+
+[[route]]
+method = "POST"
+path = "/container/exec-write"
+call = "anthracite:containers/runtime@1.0.0#exec-write"
+
+[[route]]
+method = "POST"
+path = "/container/exec-resize"
+call = "anthracite:containers/runtime@1.0.0#exec-resize"
+
+[[route]]
+method = "POST"
+path = "/container/exec-close"
+call = "anthracite:containers/runtime@1.0.0#exec-close"
+
+[[route]]
+method = "GET"
+path = "/images"
+call = "anthracite:containers/runtime@1.0.0#list-images"
+
+[[route]]
+method = "GET"
+path = "/images/pull"
+call = "anthracite:containers/runtime@1.0.0#pull"
+stream = true
+
+[[route]]
+method = "POST"
+path = "/images/remove"
+call = "anthracite:containers/runtime@1.0.0#remove-image"
+
+[[route]]
+method = "GET"
+path = "/volumes"
+call = "anthracite:containers/runtime@1.0.0#list-volumes"
+
+[[route]]
+method = "POST"
+path = "/volumes/create"
+call = "anthracite:containers/runtime@1.0.0#create-volume"
+
+[[route]]
+method = "POST"
+path = "/volumes/remove"
+call = "anthracite:containers/runtime@1.0.0#remove-volume"
+
+[[route]]
+method = "GET"
+path = "/networks"
+call = "anthracite:containers/runtime@1.0.0#list-networks"
+
+[[slot]]
+id = "panel.view"
+label = "Containers"
+icon = "box"
+order = 25
+tag = "anth-containers"
+module = "web/containers.js"
+sha256 = "{{module_sha256}}"
+
+[[slot]]
+id = "panel.fab"
+label = "Containers"
+icon = "plus"
+order = 25
+tag = "containers-fab"
+view = "anth-containers"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Create container"
+icon = "plus"
+tag = "create"
+target = "containers-create-modal"
+
+[[slot.actions]]
+label = "Refresh"
+icon = "refresh"
+tag = "refresh"
+action = "refresh"
+
+[[slot]]
+id = "panel.modal"
+label = "Create container"
+order = 41
+tag = "containers-create-modal"
+module = "web/containers-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[cli]]
+call = "anthracite:containers/runtime@1.0.0#list-containers"
+verb = "list"
+
+[[cli]]
+call = "anthracite:containers/runtime@1.0.0#inspect"
+verb = "inspect"
+
+[[cli]]
+call = "anthracite:containers/runtime@1.0.0#start"
+verb = "start"
+
+[[cli]]
+call = "anthracite:containers/runtime@1.0.0#stop"
+verb = "stop"
+
+[[cli]]
+call = "anthracite:containers/runtime@1.0.0#list-images"
+verb = "images"

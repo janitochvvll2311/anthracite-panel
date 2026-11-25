@@ -1703,6 +1703,112 @@ struct GrantBody {
     accept: Vec<Risk>,
 }
 
+/// A service that declares a runtime socket must be able to connect to it as
+/// its own uid/gid. With a root engine the service gets the engine gid and no
+/// supplementary groups; an unprivileged engine keeps its groups, which this
+/// check accepts. A root:docker 0660 socket therefore fails from a root engine
+/// unless the operator grants that gid, and approval names the command instead
+/// of leaving a silent EACCES at runtime.
+fn check_socket_access(
+    roots: &[String],
+    gid: u32,
+    groups: &[u32],
+    owner: Option<u32>,
+    service_uid: u32,
+) -> Result<(), Error> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let roots = anth_contract::manifest::parse_roots(roots)?;
+    for root in &roots {
+        let path = &root.path;
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            // A missing socket is the degraded case; the service starts and
+            // reports it. It is not an approval error.
+            Err(_) => continue,
+        };
+        if !metadata.file_type().is_socket() {
+            continue;
+        }
+        let mode = metadata.mode() & 0o777;
+        let group_ok =
+            (metadata.gid() == gid || groups.contains(&metadata.gid())) && (mode & 0o020) != 0;
+        let owner_ok = owner
+            .map(|uid| metadata.uid() == uid && (mode & 0o200) != 0)
+            .unwrap_or(false);
+        let world_ok = (mode & 0o002) != 0;
+        if !owner_ok && !group_ok && !world_ok {
+            return Err(Error::denied(format!(
+                "the service runs with gid {gid} and cannot connect to the runtime socket \
+                 {path} (mode {mode:o}, owner gid {}). Grant it with \
+                 chgrp {gid} {path} && chmod 0660 {path} and approve again.",
+                metadata.gid()
+            )));
+        }
+        check_traversal(std::path::Path::new(path), gid, groups, service_uid)?;
+        // A symlink root is useful (a stable name for a moving socket), but the
+        // real target's ancestors need search permission too.
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            if canonical != std::path::Path::new(path) {
+                check_traversal(&canonical, gid, groups, service_uid)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `connect(2)` needs search permission on every ancestor. A world-writable
+/// socket under a 0700 directory still fails, which is the rootless Podman
+/// socket read from a root engine.
+fn check_traversal(
+    path: &std::path::Path,
+    gid: u32,
+    groups: &[u32],
+    uid: u32,
+) -> Result<(), Error> {
+    use std::os::unix::fs::MetadataExt;
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if let Ok(metadata) = std::fs::metadata(dir) {
+            let mode = metadata.mode() & 0o777;
+            let ok = uid == 0
+                || (metadata.uid() == uid && (mode & 0o100) != 0)
+                || ((metadata.gid() == gid || groups.contains(&metadata.gid()))
+                    && (mode & 0o010) != 0)
+                || (mode & 0o001) != 0;
+            if !ok {
+                return Err(Error::denied(format!(
+                    "the service uid {uid} cannot traverse {} (mode {mode:o}). \
+                     Grant search with chgrp {gid} {} && chmod 0710 {}, then approve again.",
+                    dir.display(),
+                    dir.display(),
+                    dir.display()
+                )));
+            }
+        }
+        current = dir.parent();
+    }
+    Ok(())
+}
+
+/// The engine supplementary groups; an unprivileged service keeps them, so
+/// approval must accept a socket reachable through one.
+fn engine_groups() -> Vec<u32> {
+    // SAFETY: getgroups writes at most `count` u32 values into the buffer.
+    unsafe {
+        let count = libc::getgroups(0, std::ptr::null_mut());
+        if count <= 0 {
+            return Vec::new();
+        }
+        let mut buffer = vec![0u32; count as usize];
+        let written = libc::getgroups(count, buffer.as_mut_ptr());
+        if written < 0 {
+            return Vec::new();
+        }
+        buffer.truncate(written as usize);
+        buffer
+    }
+}
+
 /// Approves the app: computes its risk over the installed graph, freezes the
 /// grant and audits it.
 async fn approve_app(
@@ -1723,6 +1829,36 @@ async fn approve_app(
         .approval_material(&id)?
         .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
     let existed = apps.grants.contains(&id)?;
+    if let Some(service) = installed.manifest.service.as_ref() {
+        // SAFETY: the id syscalls have no preconditions. Services run with the
+        // engine gid; without root they also keep the engine uid, so the owner
+        // bits count.
+        let gid = unsafe { libc::getegid() };
+        let euid = unsafe { libc::geteuid() };
+        let owner = if euid == 0 { None } else { Some(euid) };
+        let service_uid = if euid == 0 {
+            state.service_uid_of(&id).unwrap_or(0)
+        } else {
+            euid
+        };
+        let groups = if euid == 0 {
+            Vec::new()
+        } else {
+            engine_groups()
+        };
+        if let Err(error) = check_socket_access(&service.roots, gid, &groups, owner, service_uid) {
+            return Err(audit_or_error(
+                audit_failure(
+                    apps,
+                    &actor,
+                    AuditAction::AppApprove,
+                    Some(id.as_str()),
+                    &error,
+                ),
+                error,
+            ));
+        }
+    }
     let installed_apps = installed_apps(apps)?;
     let grant = approve(
         &id,

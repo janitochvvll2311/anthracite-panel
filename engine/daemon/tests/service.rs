@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anth_compose::audit::AuditLog;
-use anth_contract::{AppId, AuditAction, ExportTarget, Listener, Root, ServiceClass};
+use anth_contract::{AppId, AuditAction, ExportTarget, Listener, Outcome, Root, ServiceClass};
 use anth_engine::service::{ServiceLaunch, ServiceSupervisor};
 use futures_util::StreamExt;
 use serde_json::json;
@@ -32,9 +32,10 @@ fn fixture() -> PathBuf {
         .expect("target directory")
         .join("examples")
         .join("echo_service");
-    if !path.exists() {
-        // `cargo test --workspace` builds examples; a narrow `--test service`
-        // does not, so build the one this test needs instead of failing oddly.
+    // Always let cargo decide whether the example is current: a stale binary
+    // would hide changes such as the `status` fields this suite asserts.
+    static BUILD: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    BUILD.get_or_init(|| {
         let status = std::process::Command::new(
             std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()),
         )
@@ -43,7 +44,7 @@ fn fixture() -> PathBuf {
         .status()
         .expect("build the service fixture");
         assert!(status.success(), "the service fixture did not build");
-    }
+    });
     path
 }
 
@@ -69,6 +70,33 @@ fn launch(state: &Path, extra: &[&str], start_timeout: Duration) -> ServiceLaunc
         exports,
         start_timeout,
     }
+}
+
+#[tokio::test]
+async fn a_root_engine_drops_the_supplementary_groups() {
+    if !anth_engine::sandbox::is_root() {
+        eprintln!("skipping: an unprivileged engine keeps its groups");
+        return;
+    }
+    let state = scratch("groups");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let mut spec = launch(&state, &[], Duration::from_millis(500));
+    // /proc is outside the sandbox by default; the status probe needs the file.
+    spec.roots = vec![Root {
+        path: "/proc".to_string(),
+        read_only: true,
+    }];
+    services.start(spec).await.expect("start");
+    let status = services
+        .call(APP, INTERFACE, "status", json!({}))
+        .await
+        .expect("status");
+    assert_eq!(
+        status["Groups"], "",
+        "the service inherited supplementary groups: {status}"
+    );
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
 }
 
 #[tokio::test]
@@ -171,7 +199,9 @@ async fn a_read_only_root_cannot_be_written() {
 }
 
 #[tokio::test]
-async fn a_missing_root_is_a_landlock_denial() {
+async fn a_missing_root_is_denied_not_fatal() {
+    // A runtime socket that is not installed is the common case: the service
+    // must start so the app can report it, while the missing path stays denied.
     let state = scratch("missing-root");
     let mut spec = launch(&state, &[], Duration::from_millis(500));
     spec.roots = vec![Root {
@@ -179,20 +209,52 @@ async fn a_missing_root_is_a_landlock_denial() {
         read_only: true,
     }];
     let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
-    let error = services.start(spec).await.expect_err("missing root");
-    assert_eq!(error.kind(), anth_contract::ErrorKind::Denied, "{error}");
+    services.start(spec).await.expect("start");
+    let outside = services
+        .call(APP, INTERFACE, "outside", json!({}))
+        .await
+        .expect("outside");
+    assert_eq!(outside["read"], false, "{outside}");
+    assert_eq!(outside["list"], false, "{outside}");
     let entries = AuditLog::new(&state).entries().expect("audit");
-    let deny = entries
+    let start = entries
         .iter()
-        .find(|entry| entry.action == AuditAction::ServiceDeny)
-        .expect("denied");
+        .find(|entry| entry.action == AuditAction::ServiceStart && entry.result == Outcome::Ok)
+        .expect("start audit");
     assert_eq!(
-        deny.detail
+        start
+            .detail
             .as_ref()
-            .and_then(|detail| detail["layer"].as_str()),
-        Some("landlock"),
-        "{deny:?}"
+            .and_then(|detail| detail["missing-roots"].as_array())
+            .map(|roots| roots.len()),
+        Some(1),
+        "{start:?}"
     );
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_socket_root_starts_and_answers() {
+    let state = scratch("socket-root");
+    let path = state.join("runtime.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&path).expect("socket");
+    let mut spec = launch(&state, &[], Duration::from_millis(500));
+    spec.roots = vec![Root {
+        path: path.to_string_lossy().into_owned(),
+        read_only: false,
+    }];
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services
+        .start(spec)
+        .await
+        .expect("start with a socket root");
+    let output = services
+        .call(APP, INTERFACE, "echo", json!({"message": "socket"}))
+        .await
+        .expect("call");
+    assert_eq!(output, json!({"message": "socket"}));
+    services.stop(APP).await;
     let _ = std::fs::remove_dir_all(&state);
 }
 

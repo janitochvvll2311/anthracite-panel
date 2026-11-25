@@ -619,11 +619,19 @@ async fn drive(service: Arc<Service>, ready: oneshot::Sender<Result<(), Error>>)
                     }
                 }
                 service.running.store(true, Ordering::Release);
-                service.record(
-                    AuditAction::ServiceStart,
-                    Outcome::Ok,
-                    Some(serde_json::json!({"class": service.class.as_str()})),
-                );
+                let missing: Vec<String> = service
+                    .roots
+                    .iter()
+                    .filter(|root| std::fs::metadata(&root.path).is_err())
+                    .map(|root| root.path.clone())
+                    .collect();
+                let mut detail = serde_json::json!({"class": service.class.as_str()});
+                if !missing.is_empty() {
+                    // The rule was skipped so the service could start; the
+                    // operator still gets a trail for the mistyped/missing path.
+                    detail["missing-roots"] = serde_json::json!(missing);
+                }
+                service.record(AuditAction::ServiceStart, Outcome::Ok, Some(detail));
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(Ok(()));
                 }
@@ -715,8 +723,16 @@ fn landlock_rules(service: &Service) -> Result<Vec<crate::sandbox::Rule>, Error>
         &service.binary,
     );
     for root in &service.roots {
+        let path = PathBuf::from(&root.path);
+        // A declared runtime socket that is not installed must not stop the
+        // service: the path stays denied and the app reports the missing
+        // runtime. A directory that the operator named and removed also stays
+        // denied; only the rule is skipped.
+        if std::fs::metadata(&path).is_err() {
+            continue;
+        }
         rules.push(crate::sandbox::Rule {
-            path: PathBuf::from(&root.path),
+            path,
             access: if root.read_only {
                 crate::sandbox::READ
             } else {
