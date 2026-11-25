@@ -255,6 +255,14 @@ pub fn restrict_with(ruleset: i32) -> Result<(), io::Error> {
 }
 
 fn add_rule(ruleset: i32, rule: &Rule, handled: u64) -> Result<(), io::Error> {
+    // Stat before opening the O_PATH fd: a root that disappears between the
+    // two would otherwise leak the descriptor on every supervisor retry.
+    let metadata = std::fs::metadata(&rule.path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("stat {}: {error}", rule.path.display()),
+        )
+    })?;
     let path = std::ffi::CString::new(rule.path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "the root path contains a NUL"))?;
     // SAFETY: O_PATH opens a reference for Landlock without read permission on
@@ -265,12 +273,6 @@ fn add_rule(ruleset: i32, rule: &Rule, handled: u64) -> Result<(), io::Error> {
     }
     // A runtime socket or a file root is not a directory: Landlock answers
     // EINVAL for directory rights on it. Keep only the file rights.
-    let metadata = std::fs::metadata(&rule.path).map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!("stat {}: {error}", rule.path.display()),
-        )
-    })?;
     let access = if metadata.is_dir() {
         rule.access
     } else {

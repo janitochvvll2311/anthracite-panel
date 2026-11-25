@@ -75,7 +75,7 @@ impl Service {
         let id = text(input, "id")?;
         let timeout = input
             .get("timeout-s")
-            .and_then(Value::as_u64)
+            .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
             .map(|value| value.min(600) as u32);
         self.handle
             .block_on(self.runtime.lifecycle(id, action, timeout))?;

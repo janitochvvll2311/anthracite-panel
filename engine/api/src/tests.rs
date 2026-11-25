@@ -2986,3 +2986,23 @@ fn a_fab_reaches_the_surface_with_its_actions() {
     assert_eq!(surface.actions[0].target.as_deref(), Some("edit-note"));
     assert_eq!(surface.actions[1].action.as_deref(), Some("refresh"));
 }
+
+#[test]
+fn a_runtime_socket_needs_the_service_gid_or_world_write() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = std::env::temp_dir()
+        .join("anthracite-panel")
+        .join(format!("api-socket-access-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch");
+    let path = dir.join("runtime.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&path).expect("socket");
+    let gid = std::fs::metadata(&path).expect("metadata").gid();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
+    assert!(check_socket_access(&[path.to_string_lossy().into_owned()], gid).is_err());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("mode");
+    assert!(check_socket_access(&[path.to_string_lossy().into_owned()], gid).is_ok());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).expect("mode");
+    assert!(check_socket_access(&[path.to_string_lossy().into_owned()], gid).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}

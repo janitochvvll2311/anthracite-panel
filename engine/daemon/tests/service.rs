@@ -171,7 +171,9 @@ async fn a_read_only_root_cannot_be_written() {
 }
 
 #[tokio::test]
-async fn a_missing_root_is_a_landlock_denial() {
+async fn a_missing_root_is_denied_not_fatal() {
+    // A runtime socket that is not installed is the common case: the service
+    // must start so the app can report it, while the missing path stays denied.
     let state = scratch("missing-root");
     let mut spec = launch(&state, &[], Duration::from_millis(500));
     spec.roots = vec![Root {
@@ -179,20 +181,38 @@ async fn a_missing_root_is_a_landlock_denial() {
         read_only: true,
     }];
     let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
-    let error = services.start(spec).await.expect_err("missing root");
-    assert_eq!(error.kind(), anth_contract::ErrorKind::Denied, "{error}");
-    let entries = AuditLog::new(&state).entries().expect("audit");
-    let deny = entries
-        .iter()
-        .find(|entry| entry.action == AuditAction::ServiceDeny)
-        .expect("denied");
-    assert_eq!(
-        deny.detail
-            .as_ref()
-            .and_then(|detail| detail["layer"].as_str()),
-        Some("landlock"),
-        "{deny:?}"
-    );
+    services.start(spec).await.expect("start");
+    let outside = services
+        .call(APP, INTERFACE, "outside", json!({}))
+        .await
+        .expect("outside");
+    assert_eq!(outside["read"], false, "{outside}");
+    assert_eq!(outside["list"], false, "{outside}");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_socket_root_starts_and_answers() {
+    let state = scratch("socket-root");
+    let path = state.join("runtime.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&path).expect("socket");
+    let mut spec = launch(&state, &[], Duration::from_millis(500));
+    spec.roots = vec![Root {
+        path: path.to_string_lossy().into_owned(),
+        read_only: false,
+    }];
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services
+        .start(spec)
+        .await
+        .expect("start with a socket root");
+    let output = services
+        .call(APP, INTERFACE, "echo", json!({"message": "socket"}))
+        .await
+        .expect("call");
+    assert_eq!(output, json!({"message": "socket"}));
+    services.stop(APP).await;
     let _ = std::fs::remove_dir_all(&state);
 }
 

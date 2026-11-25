@@ -1705,6 +1705,38 @@ struct GrantBody {
 
 /// Approves the app: computes its risk over the installed graph, freezes the
 /// grant and audits it.
+/// A service that declares a runtime socket must be able to connect to it as
+/// its own uid/gid. The service gets the engine gid and no supplementary
+/// groups, so a root:docker 0660 socket fails unless the operator grants that
+/// gid. Refusing at approval names the command instead of leaving a silent
+/// EACCES at runtime.
+fn check_socket_access(paths: &[String], gid: u32) -> Result<(), Error> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    for path in paths {
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            // A missing socket is the degraded case; the service starts and
+            // reports it. It is not an approval error.
+            Err(_) => continue,
+        };
+        if !metadata.file_type().is_socket() {
+            continue;
+        }
+        let mode = metadata.mode() & 0o777;
+        let group_ok = metadata.gid() == gid && (mode & 0o020) != 0;
+        let world_ok = (mode & 0o002) != 0;
+        if !group_ok && !world_ok {
+            return Err(Error::denied(format!(
+                "the service runs with gid {gid} and cannot connect to the runtime socket \
+                 {path} (mode {mode:o}, owner gid {}). Grant it with \
+                 chgrp {gid} {path} && chmod 0660 {path} and approve again.",
+                metadata.gid()
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn approve_app(
     State(state): State<Arc<EngineState>>,
     Path(id): Path<String>,
@@ -1723,6 +1755,11 @@ async fn approve_app(
         .approval_material(&id)?
         .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
     let existed = apps.grants.contains(&id)?;
+    if let Some(service) = installed.manifest.service.as_ref() {
+        // SAFETY: `getegid` has no preconditions; services run with this gid.
+        let gid = unsafe { libc::getegid() };
+        check_socket_access(&service.roots, gid).map_err(ApiError)?;
+    }
     let installed_apps = installed_apps(apps)?;
     let grant = approve(
         &id,

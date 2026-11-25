@@ -237,7 +237,6 @@ fn parse_port(value: &str) -> Result<Port, Error> {
         }
         None => (value, "tcp".to_string()),
     };
-    let parts: Vec<&str> = value.split(':').collect();
     let number = |value: &str| -> Result<u16, Error> {
         let port = value
             .parse::<u16>()
@@ -247,6 +246,29 @@ fn parse_port(value: &str) -> Result<Port, Error> {
         }
         Ok(port)
     };
+    // `[::1]:8080:80` and the bare `::1:8080:80` both name an IPv6 bind; the
+    // last two colon-separated fields are always host and container.
+    if let Some(rest) = value.strip_prefix('[') {
+        let (ip, rest) = rest
+            .split_once(']')
+            .ok_or_else(|| Error::invalid(format!("`{value}` has an unclosed address")))?;
+        let rest = rest
+            .strip_prefix(':')
+            .ok_or_else(|| Error::invalid(format!("`{value}` needs :host:container")))?;
+        let parts: Vec<&str> = rest.split(':').collect();
+        if parts.len() != 2 {
+            return Err(Error::invalid(format!("`{value}` is not a port mapping")));
+        }
+        let ip = ip
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| Error::invalid(format!("`{ip}` is not a bind address")))?;
+        return Ok(Port {
+            container: number(parts[1])?,
+            protocol,
+            host: Some((ip.to_string(), number(parts[0])?)),
+        });
+    }
+    let parts: Vec<&str> = value.split(':').collect();
     match parts.as_slice() {
         [container] => Ok(Port {
             container: number(container)?,
@@ -258,17 +280,18 @@ fn parse_port(value: &str) -> Result<Port, Error> {
             protocol,
             host: Some(("0.0.0.0".to_string(), number(host)?)),
         }),
-        [ip, host, container] => {
-            if ip.parse::<std::net::IpAddr>().is_err() {
-                return Err(Error::invalid(format!("`{ip}` is not a bind address")));
-            }
+        parts => {
+            let split = parts.len() - 2;
+            let ip = parts[..split].join(":");
+            let ip = ip
+                .parse::<std::net::IpAddr>()
+                .map_err(|_| Error::invalid(format!("`{ip}` is not a bind address")))?;
             Ok(Port {
-                container: number(container)?,
+                container: number(parts[parts.len() - 1])?,
                 protocol,
-                host: Some((ip.to_string(), number(host)?)),
+                host: Some((ip.to_string(), number(parts[split])?)),
             })
         }
-        _ => Err(Error::invalid(format!("`{value}` is not a port mapping"))),
     }
 }
 
@@ -562,6 +585,21 @@ mod tests {
         let request: CreateRequest = serde_json::from_value(value).expect("request");
         let error = request.body().expect_err("host namespace");
         assert!(error.to_string().contains("host"));
+    }
+
+    #[test]
+    fn an_ipv6_bind_address_is_parsed() {
+        for value in ["[::1]:8080:80", "::1:8080:80"] {
+            let port = parse_port(value).expect(value);
+            assert_eq!(port.container, 80);
+            assert_eq!(port.host.as_ref().expect("host").0, "::1");
+            assert_eq!(port.host.as_ref().expect("host").1, 8080);
+        }
+        assert!(parse_port("[::1:8080:80").is_err());
+        assert!(
+            parse_port("::1:8080").is_err(),
+            "a bare IPv6 needs host and container"
+        );
     }
 
     #[test]

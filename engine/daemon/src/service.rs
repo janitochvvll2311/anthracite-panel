@@ -715,8 +715,16 @@ fn landlock_rules(service: &Service) -> Result<Vec<crate::sandbox::Rule>, Error>
         &service.binary,
     );
     for root in &service.roots {
+        let path = PathBuf::from(&root.path);
+        // A declared runtime socket that is not installed must not stop the
+        // service: the path stays denied and the app reports the missing
+        // runtime. A directory that the operator named and removed also stays
+        // denied; only the rule is skipped.
+        if std::fs::metadata(&path).is_err() {
+            continue;
+        }
         rules.push(crate::sandbox::Rule {
-            path: PathBuf::from(&root.path),
+            path,
             access: if root.read_only {
                 crate::sandbox::READ
             } else {

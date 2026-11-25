@@ -77,6 +77,37 @@ export function parseLabels(
     });
 }
 
+/// Splits a command line on unquoted whitespace. Single and double quotes keep
+/// an argument together, so `nginx -g "daemon off;"` has three parts.
+export function parseCommand(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  let started = false;
+  for (const character of value) {
+    if (quote) {
+      if (character === quote) quote = null;
+      else current += character;
+      started = true;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      started = true;
+    } else if (/\s/.test(character)) {
+      if (started) {
+        parts.push(current);
+        current = "";
+        started = false;
+      }
+    } else {
+      current += character;
+      started = true;
+    }
+  }
+  if (quote) throw new Error("unterminated quote in the command");
+  if (started) parts.push(current);
+  return parts;
+}
+
 export function matches(container: Container, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;

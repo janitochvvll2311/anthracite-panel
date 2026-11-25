@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   formatBytes,
   matches,
+  parseCommand,
   parseEnv,
   parseLabels,
   parseVolumes,
@@ -37,6 +38,21 @@ test("ids are shortened and bytes are human", () => {
   expect(formatBytes(0)).toBe("0 B");
   expect(formatBytes(1536)).toBe("1.5 KiB");
   expect(percent(12.34)).toBe("12.3%");
+});
+
+test("a command keeps quoted arguments together", () => {
+  expect(parseCommand("nginx -g 'daemon off;'")).toEqual([
+    "nginx",
+    "-g",
+    "daemon off;",
+  ]);
+  expect(parseCommand('sh -c "echo hello world"')).toEqual([
+    "sh",
+    "-c",
+    "echo hello world",
+  ]);
+  expect(parseCommand("  ")).toEqual([]);
+  expect(() => parseCommand("'open")).toThrow();
 });
 
 test("env lines keep a value that contains equals", () => {

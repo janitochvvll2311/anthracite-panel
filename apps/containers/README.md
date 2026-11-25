@@ -27,7 +27,19 @@ roots = ["/var/run/docker.sock"]
 - Every mutation is audited with the container/image id and action. Environment
   values and registry credentials never reach an audit record or a log.
 - A missing socket, a permission error and an unsupported API version are typed
-  errors: the app degrades, the engine keeps running.
+  errors: the app starts and the view shows the error, the engine keeps running.
+- The service runs as a dedicated uid with the **engine gid and no supplementary
+  groups**. Docker installs its socket `root:docker 0660`; grant the engine gid
+  before approval:
+
+  ```sh
+  chgrp <engine-gid> /var/run/docker.sock
+  chmod 0660 /var/run/docker.sock
+  ```
+
+  Approval refuses a socket root the service could not connect to and names
+  that command. A world-connectable socket also works, but is not recommended
+  for a root-equivalent endpoint.
 
 ## Runtime
 
@@ -79,6 +91,12 @@ exhaust the panel. Stats are sampled every two seconds and streamed as records.
 
 ## Tests
 
+- Fixture: `bun scripts/containers-fixture.ts [socket]` serves the Engine API
+  used by the panel e2e (a running `web`, an exited `job`, one image, a volume
+  and the bridge network). Build the QA bundle with
+  `ANTH_CONTAINERS_RUNTIME=<socket> apps/containers/build.sh`, compose it, and
+  run the spec with `ANTH_CONTAINERS_FIXTURE=1`; without that variable the spec
+  skips.
 - Unit: create validation (bind/privileged/host namespace, ports, names,
   volumes), the container/image/volume/network mappings, stats math, frame
   decoding and the port/reference helpers.

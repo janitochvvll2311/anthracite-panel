@@ -29,6 +29,12 @@ test("the containers view lists, follows logs and creates from the FAB", async (
     test.skip(true, "the composition has no org.anthracite.containers view");
     return;
   }
+  // The seeded `web` container and its logs come from the Engine API fixture
+  // (scripts/containers-fixture.ts), not from a real Docker host.
+  if (!process.env.ANTH_CONTAINERS_FIXTURE) {
+    test.skip(true, "needs the Engine API fixture (ANTH_CONTAINERS_FIXTURE)");
+    return;
+  }
   await view.first().click();
   const slot = panel.panes.slot("org.anthracite.containers");
   await slot.waitUntilMounted({ app: "org.anthracite.containers" });
@@ -70,15 +76,16 @@ test("the containers view lists, follows logs and creates from the FAB", async (
   const frame = panel.modal.slot().frame;
   await expect(frame.getByTestId("containers-create-image")).toBeVisible();
   await waitForForm(panel.modal.body, frame);
+  const name = `e2e-${Date.now()}`;
   await frame.getByTestId("containers-create-image").fill("alpine:3.21");
-  await frame.getByTestId("containers-create-name").fill("e2e");
+  await frame.getByTestId("containers-create-name").fill(name);
   await frame
     .getByTestId("containers-modal-submit")
     .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(panel.modal.root).toBeHidden({ timeout: 30_000 });
 
-  const created = slot.frame.locator('[data-testid="container"]', {
-    hasText: "e2e",
-  });
+  const created = slot.frame
+    .locator('[data-testid="container"]', { hasText: name })
+    .first();
   await expect(created).toBeVisible({ timeout: 15_000 });
 });

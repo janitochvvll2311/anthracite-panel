@@ -1,5 +1,5 @@
 import { call } from "./api";
-import { parseEnv, parseLabels, parseVolumes } from "./state";
+import { parseCommand, parseEnv, parseLabels, parseVolumes } from "./state";
 import { styles } from "./styles";
 import type { ModalContext } from "./types";
 
@@ -81,9 +81,7 @@ export function mount(root: HTMLElement, context: ModalContext) {
         setStatus("An image reference is required.", true);
         return;
       }
-      const command = text("command")
-        .split(/\s+/)
-        .filter(Boolean);
+      const command = parseCommand(text("command"));
       const ports = text("ports")
         .split(/[,\s]+/)
         .filter(Boolean);

@@ -358,11 +358,14 @@ impl Runtime {
         reference: &str,
     ) -> Result<futures_util::stream::BoxStream<'static, Result<Vec<u8>, Error>>, Error> {
         let (image, tag) = split_reference(reference)?;
-        let path = self.path(&format!(
-            "/images/create?fromImage={}&tag={}",
-            encode(&image),
-            encode(&tag)
-        ));
+        let path = self.path(&match tag {
+            Some(tag) => format!(
+                "/images/create?fromImage={}&tag={}",
+                encode(&image),
+                encode(&tag)
+            ),
+            None => format!("/images/create?fromImage={}", encode(&image)),
+        });
         let mut head = self.open("POST", &path, Some(b"{}")).await?;
         if !head.ok() {
             let body = read_body(&mut head).await.unwrap_or_default();
@@ -678,16 +681,19 @@ fn encode(value: &str) -> String {
     out
 }
 
-fn split_reference(reference: &str) -> Result<(String, String), Error> {
+fn split_reference(reference: &str) -> Result<(String, Option<String>), Error> {
     let reference = reference.trim();
     if reference.is_empty() {
         return Err(Error::invalid("an image reference is required"));
+    }
+    if reference.contains('@') {
+        return Ok((reference.to_string(), None));
     }
     let (image, tag) = match reference.rsplit_once(':') {
         Some((image, tag)) if !tag.contains('/') && !image.ends_with('/') => (image, tag),
         _ => (reference, "latest"),
     };
-    Ok((image.to_string(), tag.to_string()))
+    Ok((image.to_string(), Some(tag.to_string())))
 }
 
 /// Maps one one-shot Docker stats document to the WIT `sample`.
@@ -793,11 +799,15 @@ mod tests {
     fn references_split_tags_and_default_latest() {
         assert_eq!(
             split_reference("nginx:1.27").expect("image"),
-            ("nginx".to_string(), "1.27".to_string())
+            ("nginx".to_string(), Some("1.27".to_string()))
         );
         assert_eq!(
             split_reference("ghcr.io/acme/app").expect("image"),
-            ("ghcr.io/acme/app".to_string(), "latest".to_string())
+            ("ghcr.io/acme/app".to_string(), Some("latest".to_string()))
+        );
+        assert_eq!(
+            split_reference("alpine@sha256:abc").expect("digest"),
+            ("alpine@sha256:abc".to_string(), None)
         );
     }
 

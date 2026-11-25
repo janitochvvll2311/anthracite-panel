@@ -56,6 +56,38 @@ function parseLabels(lines) {
     return { name: line.slice(0, index), value: line.slice(index + 1) };
   });
 }
+function parseCommand(value) {
+  const parts = [];
+  let current = "";
+  let quote = null;
+  let started = false;
+  for (const character of value) {
+    if (quote) {
+      if (character === quote)
+        quote = null;
+      else
+        current += character;
+      started = true;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      started = true;
+    } else if (/\s/.test(character)) {
+      if (started) {
+        parts.push(current);
+        current = "";
+        started = false;
+      }
+    } else {
+      current += character;
+      started = true;
+    }
+  }
+  if (quote)
+    throw new Error("unterminated quote in the command");
+  if (started)
+    parts.push(current);
+  return parts;
+}
 
 // src/styles.ts
 var styles = `
@@ -232,7 +264,7 @@ function mount(root, context) {
         setStatus("An image reference is required.", true);
         return;
       }
-      const command = text("command").split(/\s+/).filter(Boolean);
+      const command = parseCommand(text("command"));
       const ports = text("ports").split(/[,\s]+/).filter(Boolean);
       const network = text("network") || null;
       const request = {
