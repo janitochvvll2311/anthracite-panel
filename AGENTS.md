@@ -25,13 +25,13 @@ What is left is operational, not code: GitHub Actions has no runner (every job
 fails in two seconds with `runner_id: 0`), no real release key has been used yet,
 and the native services have not been exercised on a deployment host.
 
-`v0.7.0`/M6 is code-complete through the edge composition: manifest v4, sandbox
-L1 and the port capability, the broker/audit/surface exports, and the five apps
+`v0.7.0`/M6 is complete and tagged at `1f09a3a`: manifest v4, sandbox L1 and
+the port capability, the broker/audit/surface exports, and the five apps
 (`certs`, `acme`, `proxy`, `containers`, `store`). The edge composition is
 `compositions/edge.toml`; the removal matrix is
 `engine/api/tests/golden.rs`; the release gate and manual QA are
-`docs/guide/release-notes.md` and `docs/guide/edge-qa.md`. The release tag is
-cut after the hardening PR merges. The next milestone is not planned yet.
+`docs/guide/release-notes.md` and `docs/guide/edge-qa.md`. The close report is
+`docs/features/v0-7-0/report.md`. The next milestone is not planned yet.
 
 `v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
 code, its crates or its structure.
