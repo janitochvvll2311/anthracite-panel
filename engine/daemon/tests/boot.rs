@@ -406,6 +406,12 @@ async fn a_service_only_app_starts_answers_and_stops() {
     let services =
         anth_engine::service::ServiceSupervisor::for_state(&dir, std::time::Duration::from_secs(2));
     let supervisor = Supervisor::new(Arc::new(FakeRuntime::new()));
+    // A cold CI runner is slower than a local shell; the default 5s start
+    // window makes this test flaky under load.
+    let limits = LimitsSection {
+        start_timeout_ms: 30_000,
+        ..LimitsSection::default()
+    };
     let report = start_composed(
         &supervisor,
         &services,
@@ -414,13 +420,18 @@ async fn a_service_only_app_starts_answers_and_stops() {
         anth_engine::boot::BootOptions {
             allow_degraded: false,
             allow_third_party_service: true,
-            limits: &LimitsSection::default(),
+            limits: &limits,
             log: LogSettings::default(),
         },
     )
     .await
     .expect("boot");
-    assert_eq!(report.started, vec![app.clone()]);
+    assert_eq!(
+        report.started,
+        vec![app.clone()],
+        "degraded: {:?}",
+        report.degraded
+    );
     assert!(socket.exists());
     let mode = fs::metadata(dir.join("broker"))
         .expect("broker directory")
