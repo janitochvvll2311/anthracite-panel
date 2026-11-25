@@ -217,6 +217,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
   async function refresh(): Promise<void> {
     try {
       setStatus("Refreshing catalogues…");
+      // A click can land before the first load resolves; sources is still empty.
+      if (sources.length === 0) await loadSources();
       let failures = 0;
       for (const source of sources) {
         try {

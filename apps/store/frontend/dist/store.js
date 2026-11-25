@@ -296,6 +296,8 @@ function mount(root, context) {
   async function refresh() {
     try {
       setStatus("Refreshing catalogues…");
+      if (sources.length === 0)
+        await loadSources();
       let failures = 0;
       for (const source of sources) {
         try {

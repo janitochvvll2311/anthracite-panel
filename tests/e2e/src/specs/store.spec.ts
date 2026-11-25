@@ -38,17 +38,22 @@ test("the manager installs a catalogue bundle and asks about the signer", async 
     test.skip(true, "the composition has no org.anthracite.store view");
     return;
   }
-  if (!process.env.ANTH_STORE_FIXTURE || !process.env.ANTH_STORE_PUBLIC_KEY) {
-    test.skip(true, "needs ANTH_STORE_FIXTURE and ANTH_STORE_PUBLIC_KEY");
+  if (
+    !process.env.ANTH_STORE_FIXTURE ||
+    !process.env.ANTH_STORE_PUBLIC_KEY ||
+    !process.env.ANTH_STORE_SIGNER
+  ) {
+    test.skip(
+      true,
+      "needs ANTH_STORE_FIXTURE, ANTH_STORE_PUBLIC_KEY and ANTH_STORE_SIGNER",
+    );
     return;
   }
   // Make the handoff deterministic: a key added by a previous run would hide
   // the signer prompt this test is about.
-  if (process.env.ANTH_STORE_SIGNER) {
-    await panel.page.request.delete(
-      `/api/engine/keys/${encodeURIComponent(process.env.ANTH_STORE_SIGNER)}`,
-    );
-  }
+  await panel.page.request.delete(
+    `/api/engine/keys/${encodeURIComponent(process.env.ANTH_STORE_SIGNER)}`,
+  );
   await panel.manager.open();
   await panel.manager.waitUntilLoaded();
   if ((await panel.manager.app("org.anthracite.hello").count()) > 0) {

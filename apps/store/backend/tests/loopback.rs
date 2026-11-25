@@ -211,6 +211,43 @@ async fn a_signed_index_searches_and_downloads_verified_bytes() {
     assert!(replay_error.is_err(), "an older sequence was accepted");
     drop(replay);
 
+    // Repointing the source at another signed store starts a new sequence; a
+    // lower value must be accepted instead of blocking the refresh forever.
+    let mut other = serde_json::from_slice::<Value>(&index_for_tamper).expect("index");
+    other["store"]["id"] = json!("org.other.store");
+    other["sequence"] = json!(1);
+    other["apps"][0]["name"] = json!("Other");
+    let other = serde_json::to_vec(&other).expect("other index");
+    let other_sig = sign(&key, &other);
+    let other_base = start_fixture(Arc::new(Fixture {
+        index: Arc::new(other),
+        signature: other_sig,
+        bundle: bundle.clone(),
+    }));
+    config["sources"][0]["url"] = json!(other_base);
+    std::fs::write(
+        data.join("sources.json"),
+        serde_json::to_vec_pretty(&config).expect("config"),
+    )
+    .expect("sources");
+    let other_socket = dir.join("store-other.sock");
+    let other_service = start_service(&other_socket, &data, &shared);
+    wait_socket(&other_socket);
+    let other_broker = anth_service::Broker::new(&other_socket);
+    let repointed = call(&other_broker, "refresh", json!({"source": "native"}))
+        .await
+        .expect("repointed refresh");
+    assert_eq!(repointed["trusted"], true);
+    let results = call(
+        &other_broker,
+        "search",
+        json!({"query": "notes", "limit": 10}),
+    )
+    .await
+    .expect("search");
+    assert_eq!(results[0]["name"], "Other");
+    drop(other_service);
+
     // A digest mismatch never reaches the manager.
     let mut bad = serde_json::from_slice::<Value>(&index_for_tamper).expect("index");
     bad["apps"][0]["versions"][0]["sha256"] = json!("ff".repeat(32));
