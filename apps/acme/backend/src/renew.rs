@@ -63,12 +63,15 @@ pub async fn run_once(core: &Arc<Core>) -> Result<usize, Error> {
         let Some(id) = certificate.get("id").and_then(Value::as_str) else {
             continue;
         };
-        if core
-            .orders
-            .list()
-            .iter()
-            .any(|order| order.renew_of.as_deref() == Some(id) && active(order))
-        {
+        // One renewal per certificate: an active order is already in flight,
+        // and a valid one means the old record was replaced. Without the
+        // second half the superseded record would be renewed again on every
+        // pass once it crossed two thirds, burning duplicate-certificate
+        // limits and growing the inventory.
+        if core.orders.list().iter().any(|order| {
+            order.renew_of.as_deref() == Some(id)
+                && (active(order) || matches!(order.status, Status::Valid | Status::IssuedUnstored))
+        }) {
             continue;
         }
         if !allowed(core, id) {

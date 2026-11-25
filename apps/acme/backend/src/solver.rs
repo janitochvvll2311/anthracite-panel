@@ -41,25 +41,30 @@ pub fn txt_record(name: &str, key_authorization: &str) -> DnsRecord {
     }
 }
 
-pub async fn present(solver: &Solver, record: &DnsRecord) -> Result<(), Error> {
+pub async fn present(http: &Http, solver: &Solver, record: &DnsRecord) -> Result<(), Error> {
     match solver.kind.as_str() {
         "manual" => Ok(()),
-        "webhook" => webhook(solver, "present", record).await,
+        "webhook" => webhook(http, solver, "present", record).await,
         "rfc2136" => rfc2136(solver, record, false).await,
         other => Err(Error::invalid(format!("unknown solver kind `{other}`"))),
     }
 }
 
-pub async fn cleanup(solver: &Solver, record: &DnsRecord) -> Result<(), Error> {
+pub async fn cleanup(http: &Http, solver: &Solver, record: &DnsRecord) -> Result<(), Error> {
     match solver.kind.as_str() {
         "manual" => Ok(()),
-        "webhook" => webhook(solver, "cleanup", record).await,
+        "webhook" => webhook(http, solver, "cleanup", record).await,
         "rfc2136" => rfc2136(solver, record, true).await,
         other => Err(Error::invalid(format!("unknown solver kind `{other}`"))),
     }
 }
 
-async fn webhook(solver: &Solver, action: &str, record: &DnsRecord) -> Result<(), Error> {
+async fn webhook(
+    http: &Http,
+    solver: &Solver,
+    action: &str,
+    record: &DnsRecord,
+) -> Result<(), Error> {
     let url = solver
         .url
         .as_deref()
@@ -75,7 +80,9 @@ async fn webhook(solver: &Solver, action: &str, record: &DnsRecord) -> Result<()
         "ttl": 60,
     }))
     .map_err(|error| Error::internal(format!("encoding the webhook call: {error}")))?;
-    let response = Http::new(None)?
+    // The webhook uses the operator's trust: an internal CA serves both the
+    // ACME directory and the hook, so the `ca-bundle` applies here too.
+    let response = http
         .request(Method::POST, url, &headers, body, false)
         .await?;
     if !response.status.is_success() {
@@ -87,7 +94,7 @@ async fn webhook(solver: &Solver, action: &str, record: &DnsRecord) -> Result<()
     Ok(())
 }
 
-/// Writes the token atomically at 0600 and returns its path.
+/// Writes the token atomically at 0640 and returns its path.
 pub fn write_http_token(
     root: &Path,
     token: &str,
@@ -111,7 +118,7 @@ pub fn write_http_token(
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .mode(0o640)
             .open(&temp)
             .map_err(|error| Error::unavailable(format!("writing {}: {error}", temp.display())))?;
         file.write_all(key_authorization.as_bytes())
@@ -429,7 +436,7 @@ mod tests {
         let mode = std::os::unix::fs::PermissionsExt::mode(
             &std::fs::metadata(&path).expect("meta").permissions(),
         );
-        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(mode & 0o777, 0o640);
         remove_http_token(&path);
         let _ = std::fs::remove_dir_all(&root);
     }

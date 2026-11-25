@@ -32,8 +32,9 @@ v1, wildcard issuance without DNS-01, or a general-purpose HTTP client for apps.
   are never returned by a route and never logged.
 - HTTP-01 does **not** bind port 80. The token directory is
   `--http01-root {shared}/acme/http-01` in argv; the client writes the key
-  authorization to `{shared}/acme/http-01/<token>` (`0600`) and relies on the
-  ingress that owns port 80 to serve `/.well-known/acme-challenge/<token>`. The
+  authorization to `{shared}/acme/http-01/<token>` (`0640`; the directory is
+  `0770` under the engine gid, because the ingress runs as another service uid)
+  and relies on the ingress that owns port 80 to serve `/.well-known/acme-challenge/<token>`. The
   proxy does this for a host with `acme = true`. Any other listener can read the
   same directory; this is the provider-agnostic seam.
 - Before telling the CA the challenge is ready, the client fetches

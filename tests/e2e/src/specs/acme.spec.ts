@@ -121,12 +121,6 @@ test("the issue modal runs a real Pebble order", async ({ panel }) => {
   await frame.getByTestId("acme-issue-directory").selectOption(directory);
   await frame.getByTestId("acme-issue-names").fill("localhost");
   await frame.getByTestId("acme-issue-challenge").selectOption("http-01");
-  const forceBox = await frame.getByTestId("acme-issue-force").boundingBox();
-  const iframeBox = await panel.modal.body.locator("iframe").boundingBox();
-  const inner = await frame.locator("html").evaluate((_, { x, y }) => { const el = document.elementFromPoint(x, y); return { tag: el ? el.tagName : "none", cls: el ? el.className : "", scroll: window.scrollY, rect: (document.querySelector("[data-testid=acme-issue-force]") as HTMLElement).getBoundingClientRect().toJSON() }; }, { x: forceBox!.x + 6 - iframeBox!.x, y: forceBox!.y + 6 - iframeBox!.y });
-  console.log("inner", JSON.stringify(inner), "iframe", JSON.stringify(iframeBox));
-  await panel.page.mouse.click(forceBox!.x + 6, forceBox!.y + 6);
-  console.log("force-mouse", await frame.getByTestId("acme-issue-force").isChecked());
   await frame.getByTestId("acme-modal-submit").click();
   await expect(panel.modal.root).toBeHidden({ timeout: 60_000 });
 

@@ -86,7 +86,8 @@ DNS solver:
    it as **allow a duplicate order**). It returns a pending order immediately. A worker
    owns the CA conversation: new order, authorizations, challenge, validation,
    finalize, download.
-3. HTTP-01 writes the key authorization at 0600, self-checks
+3. HTTP-01 writes the key authorization at 0640 in a 0770 directory (the proxy
+   runs under another uid and must read it), self-checks
    `http://<name>/.well-known/acme-challenge/<token>` and only then tells the CA.
 4. DNS-01 computes `_acme-challenge.<name>` and its SHA-256 TXT value. A manual
    solver publishes the instruction in the timeline and waits for

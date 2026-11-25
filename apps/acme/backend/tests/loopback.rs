@@ -64,7 +64,7 @@ async fn a_full_http01_and_manual_dns_order_lands_in_the_store() {
 
     let socket = dir.join("acme.sock");
     let broker_socket = dir.join("broker.sock");
-    let captured = start_broker(&broker_socket);
+    let store = start_broker(&broker_socket);
 
     let config = json!({
         "http-01-port": token_port,
@@ -94,7 +94,7 @@ async fn a_full_http01_and_manual_dns_order_lands_in_the_store() {
     )
     .expect("write config");
 
-    let _child = start_service(&socket, &data, &shared, &broker_socket);
+    let child = start_service(&socket, &data, &shared, &broker_socket);
     wait_socket(&socket);
     let broker = anth_service::Broker::new(&socket);
 
@@ -133,7 +133,7 @@ async fn a_full_http01_and_manual_dns_order_lands_in_the_store() {
     assert_eq!(done["certificate"], "cert-1");
 
     // The store received the real key and the order file kept only public data.
-    let stored = captured.lock().expect("captured").clone();
+    let stored = store.captured.lock().expect("captured").clone();
     assert_eq!(stored.len(), 1);
     assert!(stored[0]["key-pem"]
         .as_str()
@@ -252,6 +252,7 @@ async fn a_full_http01_and_manual_dns_order_lands_in_the_store() {
     )
     .await
     .expect("staging account");
+    let staging_id = staging["id"].as_str().expect("staging id").to_string();
     let mismatch = call(
         &broker,
         "issue",
@@ -270,7 +271,112 @@ async fn a_full_http01_and_manual_dns_order_lands_in_the_store() {
         "a staging directory issued a production order"
     );
 
+    // The renewal loop: a due certificate creates exactly one order, and a
+    // second pass skips it once the renewal is valid.
+    drop(child);
+    *store.inventory.lock().expect("inventory") = json!([{
+        "id": "renew-me",
+        "names": ["localhost"],
+        "source": "acme",
+        "auto-renew": true,
+        "not-before": now_secs() - 90 * 86_400,
+        "not-after": now_secs() + 5 * 86_400,
+        "status": "valid"
+    }]);
+    let config = acme_service::config::Config::load(&data).expect("config");
+    let http = acme_service::http::Http::new(None).expect("http");
+    let orders = acme_service::order::Orders::load(&data).expect("orders");
+    let core = Arc::new(acme_service::Core {
+        data: data.clone(),
+        shared: shared.clone(),
+        http01_root: token_dir.clone(),
+        config,
+        orders,
+        http,
+        broker: Some(anth_service::Broker::new(&broker_socket)),
+        handle: tokio::runtime::Handle::current(),
+        renew_backoff: std::sync::Mutex::new(std::collections::HashMap::new()),
+    });
+    core.orders.insert(acme_service::order::Order {
+        id: "maps-renew-me".to_string(),
+        account: staging_id.clone(),
+        names: vec!["localhost".to_string()],
+        challenge: acme_service::order::Challenge::Http01,
+        solver: None,
+        key_type: "ecdsa-p256".to_string(),
+        auto_renew: true,
+        staging: false,
+        directory: format!("{base}/staging-directory"),
+        status: acme_service::order::Status::Valid,
+        expires_at: now_secs() + 3_600,
+        certificate: Some("renew-me".to_string()),
+        last_error: None,
+        order_url: None,
+        finalize_url: None,
+        certificate_url: None,
+        renew_of: None,
+        confirmed: false,
+        events: Vec::new(),
+        created_at: now_secs(),
+        updated_at: now_secs(),
+    });
+    let started = acme_service::renew::run_once(&core)
+        .await
+        .expect("renewal pass");
+    assert_eq!(started, 1, "the due certificate did not start a renewal");
+    let mut renewal = None;
+    for _ in 0..100 {
+        if let Some(order) = core
+            .orders
+            .list()
+            .into_iter()
+            .find(|order| order.renew_of.as_deref() == Some("renew-me"))
+        {
+            let done = matches!(
+                order.status,
+                acme_service::order::Status::Valid
+                    | acme_service::order::Status::IssuedUnstored
+                    | acme_service::order::Status::Invalid
+            );
+            if done {
+                renewal = Some(order);
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let renewal = renewal.expect("the renewal did not finish");
+    assert_eq!(
+        renewal.status,
+        acme_service::order::Status::Valid,
+        "{renewal:?}"
+    );
+    let again = acme_service::renew::run_once(&core)
+        .await
+        .expect("second pass");
+    assert_eq!(again, 0, "the replaced certificate was renewed again");
+    let count = core
+        .orders
+        .list()
+        .iter()
+        .filter(|order| order.renew_of.as_deref() == Some("renew-me"))
+        .count();
+    assert_eq!(count, 1);
+    assert!(store
+        .auto_renew
+        .lock()
+        .expect("auto renew")
+        .iter()
+        .any(|call| call["id"] == "renew-me" && call["enabled"] == false));
+
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|time| time.as_secs())
+        .unwrap_or(0)
 }
 
 async fn call(
@@ -848,14 +954,26 @@ fn respond(
     let _ = stream.flush();
 }
 
-fn start_broker(socket: &Path) -> Arc<Mutex<Vec<Value>>> {
+struct FakeStore {
+    captured: Arc<Mutex<Vec<Value>>>,
+    inventory: Arc<Mutex<Value>>,
+    auto_renew: Arc<Mutex<Vec<Value>>>,
+}
+
+fn start_broker(socket: &Path) -> FakeStore {
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket).expect("broker socket");
     let captured = Arc::new(Mutex::new(Vec::new()));
+    let inventory = Arc::new(Mutex::new(json!([])));
+    let auto_renew = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&captured);
+    let stock = Arc::clone(&inventory);
+    let renew = Arc::clone(&auto_renew);
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let seen = Arc::clone(&seen);
+            let stock = Arc::clone(&stock);
+            let renew = Arc::clone(&renew);
             std::thread::spawn(move || {
                 let mut stream = stream;
                 let mut raw = Vec::new();
@@ -898,13 +1016,22 @@ fn start_broker(socket: &Path) -> Arc<Mutex<Vec<Value>>> {
                 body.truncate(length);
                 let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
                 let function = request["function"].as_str().unwrap_or("");
-                let answer = if function == "store-issued" {
-                    seen.lock()
-                        .expect("captured")
-                        .push(request["input"].clone());
-                    json!({"ok": {"id": "cert-1", "names": request["input"]["names"]}})
-                } else {
-                    json!({"ok": {}})
+                let answer = match function {
+                    "store-issued" => {
+                        seen.lock()
+                            .expect("captured")
+                            .push(request["input"].clone());
+                        json!({"ok": {"id": "cert-1", "names": request["input"]["names"]}})
+                    }
+                    "inventory" => json!({"ok": stock.lock().expect("inventory").clone()}),
+                    "set-auto-renew" => {
+                        renew
+                            .lock()
+                            .expect("auto renew")
+                            .push(request["input"].clone());
+                        json!({"ok": {}})
+                    }
+                    _ => json!({"ok": {}}),
                 };
                 let body = serde_json::to_vec(&answer).expect("broker answer");
                 let head = format!(
@@ -917,5 +1044,9 @@ fn start_broker(socket: &Path) -> Arc<Mutex<Vec<Value>>> {
             });
         }
     });
-    captured
+    FakeStore {
+        captured,
+        inventory,
+        auto_renew,
+    }
 }

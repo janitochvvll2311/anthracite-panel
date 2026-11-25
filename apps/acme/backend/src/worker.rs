@@ -13,6 +13,7 @@ use crate::account;
 use crate::acme::AcmeClient;
 use crate::config::Solver;
 use crate::crypto::{certificate_key, csr, now, split_chain};
+use crate::http::Http;
 use crate::order::{Challenge, Order, Status};
 use crate::solver::{self, DnsRecord};
 use crate::store::{self, Issued};
@@ -52,12 +53,12 @@ impl Run {
         }
     }
 
-    async fn cleanup(&mut self) {
+    async fn cleanup(&mut self, http: &Http) {
         for path in std::mem::take(&mut self.tokens) {
             solver::remove_http_token(&path);
         }
         for (solver, record) in std::mem::take(&mut self.dns) {
-            let _ = solver::cleanup(&solver, &record).await;
+            let _ = solver::cleanup(http, &solver, &record).await;
         }
     }
 }
@@ -65,7 +66,7 @@ impl Run {
 async fn run(core: &Arc<Core>, id: &str) -> Result<(), Error> {
     let mut run = Run::new();
     let result = execute(core, id, &mut run).await;
-    run.cleanup().await;
+    run.cleanup(&core.http).await;
     result
 }
 
@@ -162,7 +163,7 @@ async fn execute(core: &Arc<Core>, id: &str, run: &mut Run) -> Result<(), Error>
                     .as_ref()
                     .ok_or_else(|| Error::invalid("DNS-01 needs a configured solver"))?;
                 let txt = solver::txt_record(&identifier, &key_authorization);
-                solver::present(solver, &txt).await?;
+                solver::present(&core.http, solver, &txt).await?;
                 run.dns.push((solver.clone(), txt.clone()));
                 record = Some(txt);
             }
@@ -265,6 +266,11 @@ async fn execute(core: &Arc<Core>, id: &str, run: &mut Run) -> Result<(), Error>
                 Ok(())
             })?;
             store::remove_key(&material);
+            if let Some(previous) = order.renew_of.as_deref() {
+                // The replaced record must stop feeding the renewal loop; the
+                // skip on a valid renewal covers the window before this call.
+                let _ = store::set_auto_renew(core.broker.as_ref(), previous, false).await;
+            }
             core.orders.event(
                 id,
                 kind,

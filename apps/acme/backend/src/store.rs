@@ -108,6 +108,22 @@ pub async fn certificate(broker: Option<&Broker>, id: &str) -> Result<Value, Err
     Ok(answer)
 }
 
+pub async fn set_auto_renew(broker: Option<&Broker>, id: &str, enabled: bool) -> Result<(), Error> {
+    let broker = broker
+        .ok_or_else(|| Error::unavailable("this composition has no certificate store to update"))?;
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        broker.call(
+            STORE,
+            "set-auto-renew",
+            json!({"id": id, "enabled": enabled}),
+        ),
+    )
+    .await
+    .map_err(|_| Error::unavailable("the certificate store did not answer in time"))??;
+    Ok(())
+}
+
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let mut file = fs::OpenOptions::new()
         .write(true)
