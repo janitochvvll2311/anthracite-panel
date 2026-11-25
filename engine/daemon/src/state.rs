@@ -162,6 +162,9 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
         let accepted: &[u32] = match *name {
             "shared" => &[SHARED_MODE, DIR_MODE],
             "data" => &[ROOT_MODE, DIR_MODE],
+            // The broker listener makes its directory 0711 so a service uid can
+            // traverse to its own socket without listing the peers.
+            "broker" => &[ROOT_MODE, DIR_MODE],
             _ => &[DIR_MODE],
         };
         check_mode_any(&path, &metadata, accepted)?;
@@ -377,6 +380,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("anth-state-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn the_broker_directory_may_be_traversable() {
+        let root = scratch("broker-traversable");
+        ensure(&root).expect("ensure");
+        // `broker::start_all` widens it after the first boot.
+        fs::set_permissions(root.join("broker"), fs::Permissions::from_mode(ROOT_MODE))
+            .expect("chmod");
+        check(&root).expect("a booted tree with a 0711 broker is valid");
+        fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
