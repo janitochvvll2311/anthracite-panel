@@ -1,0 +1,142 @@
+manifest_version = 4
+
+[app]
+id = "org.anthracite.acme"
+namespace = "anthracite:acme"
+name = "{{app_name}}"
+version = "0.7.0"
+summary = "{{app_summary}}"
+license = "Apache-2.0"
+icon = "lock"
+
+[service]
+path = "{{service_path}}"
+sha256 = "{{sha256}}"
+class = "{{service_class}}"
+argv = {{service_argv}}
+egress = ["any"]
+
+[[export]]
+interface = "anthracite:acme/client@1.0.0"
+
+[[import]]
+interface = "anthracite:certs/store@1.0.0"
+
+[limits]
+# The order timeline is a record stream; the engine caps each follow call.
+bytes-total = 8388608
+bytes-per-sec = 65536
+
+[[route]]
+method = "GET"
+path = "/accounts"
+call = "anthracite:acme/client@1.0.0#list-accounts"
+
+[[route]]
+method = "POST"
+path = "/accounts"
+call = "anthracite:acme/client@1.0.0#create-account"
+
+[[route]]
+method = "GET"
+path = "/orders"
+call = "anthracite:acme/client@1.0.0#list-orders"
+
+[[route]]
+method = "POST"
+path = "/orders"
+call = "anthracite:acme/client@1.0.0#issue"
+
+[[route]]
+method = "GET"
+path = "/capabilities"
+call = "anthracite:acme/client@1.0.0#capabilities"
+
+[[route]]
+method = "GET"
+path = "/order/events"
+call = "anthracite:acme/client@1.0.0#follow"
+stream = true
+events = true
+
+[[route]]
+method = "POST"
+path = "/order/confirm"
+call = "anthracite:acme/client@1.0.0#confirm-challenge"
+
+[[route]]
+method = "POST"
+path = "/order/renew"
+call = "anthracite:acme/client@1.0.0#renew"
+
+[[route]]
+method = "POST"
+path = "/order/revoke"
+call = "anthracite:acme/client@1.0.0#revoke"
+
+[[slot]]
+id = "panel.view"
+label = "ACME"
+icon = "lock"
+order = 24
+tag = "anth-acme"
+module = "web/acme.js"
+sha256 = "{{module_sha256}}"
+
+[[slot]]
+id = "panel.fab"
+label = "ACME"
+icon = "plus"
+order = 24
+tag = "acme-fab"
+view = "anth-acme"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Issue certificate"
+icon = "plus"
+tag = "issue"
+target = "acme-issue-modal"
+
+[[slot.actions]]
+label = "Refresh"
+icon = "refresh"
+tag = "refresh"
+action = "refresh"
+
+[[slot]]
+id = "panel.modal"
+label = "Issue certificate"
+order = 40
+tag = "acme-issue-modal"
+module = "web/acme-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[cli]]
+call = "anthracite:acme/client@1.0.0#list-accounts"
+verb = "accounts"
+
+[[cli]]
+call = "anthracite:acme/client@1.0.0#create-account"
+verb = "account"
+
+[[cli]]
+call = "anthracite:acme/client@1.0.0#issue"
+verb = "issue"
+
+[[cli]]
+call = "anthracite:acme/client@1.0.0#list-orders"
+verb = "orders"
+
+[[cli]]
+call = "anthracite:acme/client@1.0.0#renew"
+verb = "renew"
+
+[[cli]]
+call = "anthracite:acme/client@1.0.0#revoke"
+verb = "revoke"
+
+[[cli]]
+call = "anthracite:acme/client@1.0.0#confirm-challenge"
+verb = "confirm"

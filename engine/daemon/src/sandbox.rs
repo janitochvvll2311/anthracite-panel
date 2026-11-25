@@ -103,6 +103,8 @@ pub struct Rule {
 /// Read and execute/traverse under the path.
 pub const READ: u64 =
     LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR;
+/// A file rule cannot carry directory rights: Landlock answers EINVAL.
+pub const READ_FILE: u64 = LANDLOCK_ACCESS_FS_READ_FILE;
 
 const LANDLOCK_ACCESS_FS_EXECUTE: u64 = 1 << 0;
 const LANDLOCK_ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
@@ -476,12 +478,61 @@ pub fn implicit_rules(
             access: READ,
         });
     }
+    // Name resolution is part of the network contract, but Landlock hides the
+    // resolver files by default. A service that resolves a host would otherwise
+    // block until its caller times out. Only the lookup files are readable;
+    // /etc/shadow and friends stay outside the view.
+    for path in [
+        "/etc/resolv.conf",
+        "/etc/hosts",
+        "/etc/nsswitch.conf",
+        "/etc/host.conf",
+        "/etc/services",
+    ] {
+        let path = Path::new(path);
+        if path.exists() {
+            rules.push(Rule {
+                path: path.to_path_buf(),
+                access: READ_FILE,
+            });
+        }
+    }
     rules
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolver_files_are_part_of_the_implicit_view() {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("sandbox-resolver-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("data")).expect("data");
+        std::fs::create_dir_all(dir.join("socket")).expect("socket");
+        std::fs::create_dir_all(dir.join("shared")).expect("shared");
+        std::fs::write(dir.join("service"), b"binary").expect("binary");
+        let rules = implicit_rules(
+            1,
+            &dir.join("data"),
+            &dir.join("socket"),
+            &dir.join("broker"),
+            &dir.join("shared"),
+            &dir.join("service"),
+        );
+        for path in ["/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf"] {
+            let path = std::path::Path::new(path);
+            if path.exists() {
+                assert!(
+                    rules.iter().any(|rule| rule.path == path),
+                    "{path:?} is not readable by a service"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn uids_are_stable_and_in_range() {

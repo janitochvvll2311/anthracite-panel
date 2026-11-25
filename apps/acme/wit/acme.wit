@@ -1,0 +1,102 @@
+package anthracite:acme@1.0.0;
+
+interface client {
+    use anth:error/kinds@1.0.0.{error};
+
+    enum challenge {
+        http-01,
+        dns-01,
+    }
+
+    /// `issued-unstored` means the CA issued the certificate but the
+    /// certificate store was absent or refused it; the material stays under
+    /// `{data}` so the operator can import it.
+    enum order-status {
+        pending,
+        ready,
+        processing,
+        valid,
+        invalid,
+        revoked,
+        issued-unstored,
+    }
+
+    record account {
+        id: string,
+        directory: string,
+        contact: list<string>,
+        status: string,
+        created-at: u64,
+        key-type: string,
+    }
+
+    record eab-credentials {
+        kid: string,
+        hmac-key: string,
+    }
+
+    record issue-request {
+        account: string,
+        names: list<string>,
+        challenge: challenge,
+        solver: option<string>,
+        key-type: string,
+        auto-renew: bool,
+        staging: bool,
+        /// Allows a second order for names that already have an open or valid
+        /// one; the operator has to ask for it (a reissue).
+        force: bool,
+    }
+
+    record order {
+        id: string,
+        account: string,
+        names: list<string>,
+        challenge: challenge,
+        status: order-status,
+        expires-at: u64,
+        certificate: option<string>,
+        last-error: option<string>,
+    }
+
+    enum event-kind {
+        created,
+        challenge-ready,
+        validated,
+        issued,
+        failed,
+        renewed,
+        revoked,
+    }
+
+    record order-event {
+        order: string,
+        kind: event-kind,
+        at: u64,
+        detail: option<string>,
+    }
+
+    record capability {
+        challenge: challenge,
+        solvers: list<string>,
+        directories: list<string>,
+        /// Directories whose orders stay staging; the panel must not infer
+        /// this from the URL.
+        staging-directories: list<string>,
+    }
+
+    list-accounts: func() -> list<account>;
+    create-account: func(directory: string, contact: list<string>, key-type: string, eab: option<eab-credentials>) -> result<account, error>;
+    issue: func(request: issue-request) -> result<order, error>;
+    renew: func(certificate: string) -> result<order, error>;
+    revoke: func(certificate: string, reason: string) -> result<bool, error>;
+    list-orders: func() -> list<order>;
+    follow: func(order: string) -> result<stream<order-event>, error>;
+    capabilities: func() -> list<capability>;
+    /// A manual DNS-01 order waits here after publishing the TXT record.
+    confirm-challenge: func(order: string) -> result<order, error>;
+}
+
+world app {
+    export client;
+}

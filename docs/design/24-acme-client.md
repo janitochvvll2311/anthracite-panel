@@ -168,4 +168,13 @@ the challenge type and the exact next step for manual DNS, never the account key
 - HTTP-01 works with the proxy and with a non-Anthracite listener that reads the
   same token directory.
 
+## 8. Implementation notes
+
+The shipped WIT follows §3 with the additions recorded in the decision log:
+`issued-unstored` in `order-status`, `confirm-challenge` for the manual DNS-01
+solver (0005), and `staging-directories` in `capability` (0007). The directory
+allowlist, the private-network opt-in and `ca-bundle` are 0004; the custody of a
+key when the store is absent is 0006, and the split between the always-on
+protocol fixture and the Pebble QA gate is 0008.
+
 ---
