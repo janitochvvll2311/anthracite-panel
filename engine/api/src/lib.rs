@@ -1703,16 +1703,16 @@ struct GrantBody {
     accept: Vec<Risk>,
 }
 
-/// Approves the app: computes its risk over the installed graph, freezes the
-/// grant and audits it.
 /// A service that declares a runtime socket must be able to connect to it as
 /// its own uid/gid. The service gets the engine gid and no supplementary
 /// groups, so a root:docker 0660 socket fails unless the operator grants that
 /// gid. Refusing at approval names the command instead of leaving a silent
 /// EACCES at runtime.
-fn check_socket_access(paths: &[String], gid: u32) -> Result<(), Error> {
+fn check_socket_access(roots: &[String], gid: u32, owner: Option<u32>) -> Result<(), Error> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    for path in paths {
+    let roots = anth_contract::manifest::parse_roots(roots)?;
+    for root in &roots {
+        let path = &root.path;
         let metadata = match std::fs::metadata(path) {
             Ok(metadata) => metadata,
             // A missing socket is the degraded case; the service starts and
@@ -1724,8 +1724,11 @@ fn check_socket_access(paths: &[String], gid: u32) -> Result<(), Error> {
         }
         let mode = metadata.mode() & 0o777;
         let group_ok = metadata.gid() == gid && (mode & 0o020) != 0;
+        let owner_ok = owner
+            .map(|uid| metadata.uid() == uid && (mode & 0o200) != 0)
+            .unwrap_or(false);
         let world_ok = (mode & 0o002) != 0;
-        if !group_ok && !world_ok {
+        if !owner_ok && !group_ok && !world_ok {
             return Err(Error::denied(format!(
                 "the service runs with gid {gid} and cannot connect to the runtime socket \
                  {path} (mode {mode:o}, owner gid {}). Grant it with \
@@ -1737,6 +1740,8 @@ fn check_socket_access(paths: &[String], gid: u32) -> Result<(), Error> {
     Ok(())
 }
 
+/// Approves the app: computes its risk over the installed graph, freezes the
+/// grant and audits it.
 async fn approve_app(
     State(state): State<Arc<EngineState>>,
     Path(id): Path<String>,
@@ -1756,9 +1761,24 @@ async fn approve_app(
         .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
     let existed = apps.grants.contains(&id)?;
     if let Some(service) = installed.manifest.service.as_ref() {
-        // SAFETY: `getegid` has no preconditions; services run with this gid.
+        // SAFETY: the id syscalls have no preconditions. Services run with the
+        // engine gid; without root they also keep the engine uid, so the owner
+        // bits count.
         let gid = unsafe { libc::getegid() };
-        check_socket_access(&service.roots, gid).map_err(ApiError)?;
+        let euid = unsafe { libc::geteuid() };
+        let owner = if euid == 0 { None } else { Some(euid) };
+        if let Err(error) = check_socket_access(&service.roots, gid, owner) {
+            return Err(audit_or_error(
+                audit_failure(
+                    apps,
+                    &actor,
+                    AuditAction::AppApprove,
+                    Some(id.as_str()),
+                    &error,
+                ),
+                error,
+            ));
+        }
     }
     let installed_apps = installed_apps(apps)?;
     let grant = approve(

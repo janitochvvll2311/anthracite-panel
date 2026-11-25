@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anth_compose::audit::AuditLog;
-use anth_contract::{AppId, AuditAction, ExportTarget, Listener, Root, ServiceClass};
+use anth_contract::{AppId, AuditAction, ExportTarget, Listener, Outcome, Root, ServiceClass};
 use anth_engine::service::{ServiceLaunch, ServiceSupervisor};
 use futures_util::StreamExt;
 use serde_json::json;
@@ -188,6 +188,20 @@ async fn a_missing_root_is_denied_not_fatal() {
         .expect("outside");
     assert_eq!(outside["read"], false, "{outside}");
     assert_eq!(outside["list"], false, "{outside}");
+    let entries = AuditLog::new(&state).entries().expect("audit");
+    let start = entries
+        .iter()
+        .find(|entry| entry.action == AuditAction::ServiceStart && entry.result == Outcome::Ok)
+        .expect("start audit");
+    assert_eq!(
+        start
+            .detail
+            .as_ref()
+            .and_then(|detail| detail["missing-roots"].as_array())
+            .map(|roots| roots.len()),
+        Some(1),
+        "{start:?}"
+    );
     services.stop(APP).await;
     let _ = std::fs::remove_dir_all(&state);
 }

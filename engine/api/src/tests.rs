@@ -2997,12 +2997,16 @@ fn a_runtime_socket_needs_the_service_gid_or_world_write() {
     std::fs::create_dir_all(&dir).expect("scratch");
     let path = dir.join("runtime.sock");
     let _listener = std::os::unix::net::UnixListener::bind(&path).expect("socket");
-    let gid = std::fs::metadata(&path).expect("metadata").gid();
+    let metadata = std::fs::metadata(&path).expect("metadata");
+    let gid = metadata.gid();
+    let uid = metadata.uid();
+    let root = path.to_string_lossy().into_owned();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
-    assert!(check_socket_access(&[path.to_string_lossy().into_owned()], gid).is_err());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, None).is_err());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, Some(uid)).is_ok());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("mode");
-    assert!(check_socket_access(&[path.to_string_lossy().into_owned()], gid).is_ok());
+    assert!(check_socket_access(&[format!("{root}:ro")], gid, None).is_ok());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).expect("mode");
-    assert!(check_socket_access(&[path.to_string_lossy().into_owned()], gid).is_ok());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, None).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -619,11 +619,19 @@ async fn drive(service: Arc<Service>, ready: oneshot::Sender<Result<(), Error>>)
                     }
                 }
                 service.running.store(true, Ordering::Release);
-                service.record(
-                    AuditAction::ServiceStart,
-                    Outcome::Ok,
-                    Some(serde_json::json!({"class": service.class.as_str()})),
-                );
+                let missing: Vec<String> = service
+                    .roots
+                    .iter()
+                    .filter(|root| std::fs::metadata(&root.path).is_err())
+                    .map(|root| root.path.clone())
+                    .collect();
+                let mut detail = serde_json::json!({"class": service.class.as_str()});
+                if !missing.is_empty() {
+                    // The rule was skipped so the service could start; the
+                    // operator still gets a trail for the mistyped/missing path.
+                    detail["missing-roots"] = serde_json::json!(missing);
+                }
+                service.record(AuditAction::ServiceStart, Outcome::Ok, Some(detail));
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(Ok(()));
                 }
