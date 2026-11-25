@@ -41,7 +41,9 @@ name = "anth-service"
 version = "0.7.0"
 dependencies = [
  "anth-contract",
+ "base64",
  "futures-core",
+ "futures-util",
  "serde",
  "serde_json",
  "tokio",
@@ -61,6 +63,12 @@ checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
 dependencies = [
  "derive_arbitrary",
 ]
+
+[[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bitflags"
