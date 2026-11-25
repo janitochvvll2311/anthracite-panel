@@ -1,0 +1,26 @@
+# The edge composition of §21 §3: the system apps plus the five v0.7 business
+# apps. It is a normal composition, not an engine mode. Install and approve the
+# bundles first, then copy this file over the state's `composition.toml` (or
+# paste the list with `anth compose`).
+#
+# `composition.allow-degraded = true` in config.toml is what lets one of the
+# five be removed while `acme` still imports `certs`: the consumer degrades with
+# `unresolved` and the rest boots (§8.5, §21 §5).
+version = 1
+
+[[profile]]
+id = "edge"
+apps = [
+    "org.anthracite.fs",
+    "org.anthracite.terminal",
+    "org.anthracite.proc",
+    "org.anthracite.net",
+    "org.anthracite.storage",
+    "org.anthracite.accounts",
+    "org.anthracite.firewall",
+    "org.anthracite.certs",
+    "org.anthracite.acme",
+    "org.anthracite.proxy",
+    "org.anthracite.containers",
+    "org.anthracite.store",
+]

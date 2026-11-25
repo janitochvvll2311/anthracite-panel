@@ -10,11 +10,14 @@ optionally TCP). A **panel** is a separate application that links the engine,
 serves a web UI and mounts the contributions of the composed apps. Our official
 panel is one; the SDK lets you write another.
 
-Version **0.6.1** (tag `v0.6.1`, the final publish of the 0.6 line; `v0.6.1a`
-was the intermediate) carries M4–M5: service apps on the v3 manifest, streams
-and quotas, the `system` tier with a compiled distribution key and a signing
-ceremony, the sandbox baseline, and an external-bundle acid test. It also
-packages the same build as variants, Docker images and standalone bundles.
+Version **0.7.0** (tag `v0.7.0`) carries M6, the operated edge: the five apps
+`certs`, `acme`, `proxy`, `containers` and `store`, manifest v4 with declared
+roots/listeners/egress, sandbox L1 with per-service uids and Landlock, the
+`CAP_NET_BIND_SERVICE` port capability, the service broker, the audit bridge and
+the manager handoff. The `v0.6` line remains the M4–M5 proof: service apps on the
+v3 manifest, streams and quotas, the `system` tier with a compiled distribution
+key and a signing ceremony, the sandbox baseline and the external-bundle acid
+test.
 The design of record is [`DESIGN.md`](DESIGN.md); the official manual is
 [`docs/guide/`](docs/guide/README.md).
 
@@ -65,7 +68,7 @@ the variants, the Docker images and the source build.
 
 ## Build from source
 
-Requirements: Linux, Rust 1.99.1, Bun 1.4.4 and `wasm-tools`. The three Rust
+Requirements: Linux, Rust 1.99.1, Bun 1.4.4 and `wasm-tools`. The four Rust
 workspaces share one target directory through the root `.cargo/config.toml`.
 
 ```sh

@@ -24,7 +24,7 @@ use anth_compose::grant::GrantStore;
 use anth_compose::keys::Distribution;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::risk::{app_risk, approve, Approval};
-use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
+use anth_compose::{composed_dependents, DegradedReason, InstalledApp, Resolution};
 use anth_contract::manifest::{parse_call, RouteTransport, SlotSection};
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
@@ -101,6 +101,9 @@ pub struct EngineState {
     pub protocol: u32,
     /// The uid that owns the daemon; root is always accepted as well.
     pub allowed_uid: u32,
+    /// Whether the composition may boot with an import that has no provider.
+    /// Off by default: a removal opts in explicitly (§8.5).
+    pub allow_degraded: bool,
     /// What is composed. The same document the daemon loaded from disk.
     pub composition: Arc<RwLock<Composition>>,
     /// Serializes a composition replacement so the `If-Match` check and the
@@ -140,6 +143,7 @@ impl EngineState {
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: 1,
             allowed_uid,
+            allow_degraded: false,
             composition: Arc::new(RwLock::new(Composition::empty())),
             compose_lock: Arc::new(tokio::sync::Mutex::new(())),
             apps: None,
@@ -179,7 +183,9 @@ impl EngineState {
             .map_err(|_| Error::internal("the composition lock is poisoned"))?
             .clone();
         let installed = installed_apps(store)?;
-        let resolution = resolve(&composition, &installed).map_err(|error| error.into_error())?;
+        let resolution = self
+            .resolve(&composition, &installed)
+            .map_err(|error| error.into_error())?;
         let installed = installed
             .into_iter()
             .map(|app| (app.manifest.app.id.clone(), app))
@@ -279,6 +285,30 @@ impl EngineState {
     pub fn with_composition(mut self, composition: Composition) -> Self {
         self.composition = Arc::new(RwLock::new(composition));
         self
+    }
+
+    /// Allows a composition with an import that has no provider to boot,
+    /// degrading the consumer instead of failing the whole document. The
+    /// operator sets this for a removal; the strict default is unchanged.
+    pub fn allow_degraded(mut self, allow: bool) -> Self {
+        self.allow_degraded = allow;
+        self
+    }
+
+    /// Resolves with this host's policy. Every API path uses it, so a surface,
+    /// an approval and the broker cannot disagree about what runs.
+    pub(crate) fn resolve(
+        &self,
+        composition: &Composition,
+        installed: &[anth_compose::InstalledApp],
+    ) -> Result<Resolution, anth_compose::ResolutionError> {
+        anth_compose::resolve_with(
+            composition,
+            installed,
+            anth_compose::ResolveOptions {
+                allow_degraded: self.allow_degraded,
+            },
+        )
     }
 
     /// The state tree the registry and the grant store read.
@@ -752,7 +782,7 @@ async fn composition(State(state): State<Arc<EngineState>>) -> Result<Response, 
     let apps = apps(&state)?;
     let composition = current_composition(&state)?;
     let installed = installed_apps(apps)?;
-    let surface = match resolve(&composition, &installed) {
+    let surface = match state.resolve(&composition, &installed) {
         Ok(resolution) => surface_view(&resolution, &installed).map_err(ApiError)?,
         Err(error) => fatal_surface(error),
     };
@@ -785,8 +815,9 @@ async fn replace_composition(
     }
     composition.validate().map_err(ApiError)?;
     let installed = installed_apps(apps)?;
-    let resolution =
-        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    let resolution = state
+        .resolve(&composition, &installed)
+        .map_err(|error| ApiError(error.into_error()))?;
     apps.compositions.save(&composition)?;
     *state
         .composition
@@ -1002,6 +1033,7 @@ fn reason_detail(reason: &DegradedReason) -> Option<Value> {
             interface,
             provider,
         } => Some(json!({"interface": interface, "provider": provider})),
+        DegradedReason::Missing { interface } => Some(json!({"interface": interface})),
         DegradedReason::RiskGrown {
             approved,
             effective,
@@ -1218,8 +1250,9 @@ async fn app_route(
         }
     };
     let composition = current_composition(&state)?;
-    let resolution =
-        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    let resolution = state
+        .resolve(&composition, &installed)
+        .map_err(|error| ApiError(error.into_error()))?;
     if !resolution.runs(&app) {
         return Err(ApiError(Error::unavailable(format!(
             "`{id}` is not running"
@@ -1348,8 +1381,9 @@ async fn app_asset(
     let apps = apps(&state)?;
     let installed = installed_apps(apps)?;
     let composition = current_composition(&state)?;
-    let resolution =
-        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    let resolution = state
+        .resolve(&composition, &installed)
+        .map_err(|error| ApiError(error.into_error()))?;
     let app = AppId::parse(&id)?;
     if !resolution.runs(&app) {
         return Err(ApiError(Error::unavailable(format!(

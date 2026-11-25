@@ -10,7 +10,8 @@ use std::path::{Component, Path};
 
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
-use anth_compose::resolve;
+use anth_compose::resolve_with;
+use anth_compose::ResolveOptions;
 use anth_contract::{AppId, Composition, Error, Grant, Tier};
 use anth_runtime::{Budget, InstanceSpec, LogSettings};
 use sha2::{Digest, Sha256};
@@ -46,15 +47,29 @@ fn degrade(
     report.degraded.insert(id.clone(), reason.into());
 }
 
+/// What a boot needs beyond the state and the composition.
+pub struct BootOptions<'a> {
+    /// Allow an import with no provider to degrade the consumer (§8.5).
+    pub allow_degraded: bool,
+    /// `[services] allow-third-party`.
+    pub allow_third_party_service: bool,
+    pub limits: &'a LimitsSection,
+    pub log: LogSettings,
+}
+
 pub async fn start_composed(
     supervisor: &Supervisor,
     services: &ServiceSupervisor,
     state: &Path,
     composition: &Composition,
-    allow_third_party_service: bool,
-    limits: &LimitsSection,
-    log: LogSettings,
+    options: BootOptions<'_>,
 ) -> Result<BootReport, Error> {
+    let BootOptions {
+        allow_degraded,
+        allow_third_party_service,
+        limits,
+        log,
+    } = options;
     services.clear_stale();
     let registry = Registry::new(state);
     let grants = GrantStore::new(state);
@@ -65,7 +80,8 @@ pub async fn start_composed(
             report.degraded.insert(id, problem.message.clone());
         }
     }
-    let resolution = match resolve(composition, &installed) {
+    let resolution = match resolve_with(composition, &installed, ResolveOptions { allow_degraded })
+    {
         Ok(resolution) => resolution,
         Err(error) => {
             report.fatal = Some(error.into_error());
@@ -507,9 +523,12 @@ mod tests {
             &services,
             &dir,
             &composition,
-            false,
-            &LimitsSection::default(),
-            LogSettings::default(),
+            BootOptions {
+                allow_degraded: false,
+                allow_third_party_service: false,
+                limits: &LimitsSection::default(),
+                log: LogSettings::default(),
+            },
         )
         .await
         .expect("boot");

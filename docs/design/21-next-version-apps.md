@@ -194,6 +194,13 @@ gone.
 
 The golden test asserts zero `fatal` and the exact expected `degraded` set for
 each removal. A missing provider is a degraded consumer, never a boot failure.
+Removing `certs` while `acme` stays composed needs
+`[composition] allow-degraded = true`; without it the unresolved import is the
+strict fatal error of [§8.5](08-composition.md#85-missing-and-failed), because
+editing the composition is what fixes it.
+
+The matrix is `engine/api/tests/golden.rs`; the edge composition is
+`compositions/edge.toml`.
 
 ## 6. Data and uninstall
 

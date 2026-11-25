@@ -1,6 +1,6 @@
 # The Anthracite guide
 
-This is the official manual for Anthracite **0.6**. It describes how to install,
+This is the official manual for Anthracite **0.7**. It describes how to install,
 configure and operate the engine and the official panel, how to write apps,
 services and panels, and how to sign and release bundles.
 
@@ -18,6 +18,9 @@ matters; it does not repeat the whole design.
 **App author.** [Apps](apps.md) → [Signing](signing.md) →
 [Services](services.md) if the app needs host reach → [Panels](panels.md) for a
 UI → the [conformance kit](apps.md#the-conformance-kit).
+
+**Edge operator.** [Edge apps](#edge-apps) → [Ports, roots and capabilities](ports.md)
+→ [Edge composition QA](edge-qa.md) → [Release notes](release-notes.md).
 
 **Panel author.** [Panels](panels.md) → [HTTP API](http-api.md) →
 [Apps](apps.md) (the surface and slot shapes).
@@ -44,6 +47,23 @@ UI → the [conformance kit](apps.md#the-conformance-kit).
 | [Security](security.md) | the authority model, secrets, what is and is not enforced |
 | [Troubleshooting](troubleshooting.md) | symptoms, causes, fixes |
 | [Glossary](glossary.md) | the vocabulary used everywhere else |
+| [Release notes](release-notes.md) | 0.7.0 changes, upgrade and limitations |
+| [Edge composition QA](edge-qa.md) | the manual matrix behind the release gate |
+
+## Edge apps
+
+The five business apps of `v0.7.0`; together with the system apps they form the
+edge composition in [`compositions/edge.toml`](../../compositions/edge.toml).
+
+| Page | Covers |
+| --- | --- |
+| [Certificates](certs.md) | inventory, import, validate and publish |
+| [ACME](acme.md) | accounts, HTTP-01, DNS-01, renewal and revocation |
+| [Reverse proxy](proxy.md) | vhosts, TLS, WebSocket, HTTP/2 and apply/rollback |
+| [Containers](containers.md) | lifecycle, logs, stats and exec |
+| [Store](store.md) | signed indexes, downloads and the manager handoff |
+| [Interface reference](interfaces.md) | the WIT functions of the five services |
+| [Ports, roots and capabilities](ports.md) | manifest v4 reach, sandbox L1 and approval text |
 
 ## Conventions
 
@@ -51,7 +71,7 @@ UI → the [conformance kit](apps.md#the-conformance-kit).
   pass `--socket <path>` when the engine does not use the default
   `/run/anth/engine.sock`.
 - `$state` is the engine's state directory (default `/var/lib/anth`).
-- `0.6.x` means the 0.6 release line; the exact version is `anth --version`.
+- `0.7.x` means the 0.7 release line; the exact version is `anth --version`.
 - Links into [`docs/design/`](../design/) explain a reason. If this guide and a
   design decision disagree, the design decision wins and the guide is wrong:
   report it.

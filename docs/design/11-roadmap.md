@@ -176,6 +176,14 @@ through the manager with an explicit approval; and removing any of the five
 leaves a working system with only the expected degraded section — asserted by
 the golden edge composition.
 
+**Status (v0.7.0):** code-complete. The five apps, the platform prerequisites and
+the sandbox shipped through
+[`docs/design/29-v0.7-plan.md`](29-v0.7-plan.md); the removal matrix is
+`engine/api/tests/golden.rs`, and the release gate and manual QA are
+[`docs/guide/release-notes.md`](../guide/release-notes.md) and
+[`docs/guide/edge-qa.md`](../guide/edge-qa.md). The tag is cut after the
+hardening phase merges.
+
 ### The platform's definition of done
 
 1. `anth-engine` with no apps is a valid, healthy system.

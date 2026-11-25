@@ -40,10 +40,17 @@ backend = "cranelift"
 | `[limits] memory-pages` | `256` | default wasm memory (64 KiB pages) |
 | `[limits] wall-ms` | `5000` | default wall-clock timeout |
 | `[limits] start-timeout-ms` | `5000` | how long a native service may take to answer `GET /health` |
+| `[composition] allow-degraded` | `false` | boot with an import that has no provider and degrade the consumer (removal mode) |
 
 `[limits]` values are defaults for an app whose manifest omits them; the app's
 `[limits]` can lower or raise them within the manifest rules. `fuel`, memory,
 the wall clock and stream byte budgets are the four resources an app can spend.
+
+`[composition] allow-degraded` is off by default: an import with no provider is
+a fatal composition error. Turn it on before removing one of the five edge apps
+while a consumer stays composed (removing `certs` leaves `acme` degraded with
+`unresolved`); the rest of the system boots and the panel names the missing
+interface. It does not relax grants or signatures.
 
 ## Profiles
 

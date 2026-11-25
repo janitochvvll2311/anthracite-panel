@@ -23,9 +23,15 @@ registry; `v0.6.1a` was the intermediate.
 
 What is left is operational, not code: GitHub Actions has no runner (every job
 fails in two seconds with `runner_id: 0`), no real release key has been used yet,
-and the native services have not been exercised on a deployment host. The next
-milestone is v0.7.0/M6 (`docs/design/11-roadmap.md`), planned in
-`docs/design/29-v0.7-plan.md` and cut from tag `v0.6.0` (`29e0ef6`).
+and the native services have not been exercised on a deployment host.
+
+`v0.7.0`/M6 is code-complete through the edge composition: manifest v4, sandbox
+L1 and the port capability, the broker/audit/surface exports, and the five apps
+(`certs`, `acme`, `proxy`, `containers`, `store`). The edge composition is
+`compositions/edge.toml`; the removal matrix is
+`engine/api/tests/golden.rs`; the release gate and manual QA are
+`docs/guide/release-notes.md` and `docs/guide/edge-qa.md`. The release tag is
+cut after the hardening PR merges. The next milestone is not planned yet.
 
 `v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
 code, its crates or its structure.
@@ -51,7 +57,7 @@ publishes and is never moved or reused.
   and feeds the codegen. `cargo-component` is not needed.
 - Bun `1.4.4` under `/tools/bun` (`BUN_INSTALL=/tools/bun`).
 - If a wrapper is missing after an environment rebuild, run `. /tools/env.sh`.
-- The three Rust workspaces share one `build.target-dir` through the root
+- The four Rust workspaces share one `build.target-dir` through the root
   `.cargo/config.toml`. Do not add per-workspace targets.
 
 ## Workspaces
@@ -103,7 +109,7 @@ scripts/release-variants.sh --release <signed-release-dir>
 # Docker images for those variants (docker load -i <tar.gz>)
 scripts/release-images.sh --variants <staged-variants-dir>
 
-# the 16 signed bundles as standalone assets (per-app installs)
+# every signed bundle as standalone assets (per-app installs)
 scripts/release-bundles.sh --release <signed-release-dir> [--out <dir>]
 
 # an app bundle (the SDK wraps these three steps)

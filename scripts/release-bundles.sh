@@ -75,14 +75,32 @@ out=${out:-$release/separate}
 rm -rf "$out"
 mkdir -p "$out"
 
-apps="accounts firewall fs home net proc storage terminal"
+apps=""
+for bundle in "$release/bundles"/*.anth; do
+    app=$(basename "$bundle" .anth)
+    # Hello is the developer example, not part of the system set.
+    [ "$app" = hello ] && continue
+    apps="$apps $app"
+done
+[ -n "$apps" ] || { echo "no bundles in $release/bundles" >&2; exit 1; }
+list=$out/.bundles
+: > "$list"
 for app in $apps; do
-    for half in system:$release/bundles demo:$release/demo; do
-        kind=${half%%:*}
-        source=${half#*:}/$app.anth
-        [ -f "$source" ] || { echo "missing $source" >&2; exit 1; }
-        cp "$source" "$out/$kind-org.anthracite.$app.anth"
-    done
+    source=$release/bundles/$app.anth
+    [ -f "$source" ] || { echo "missing $source" >&2; exit 1; }
+    cp "$source" "$out/system-org.anthracite.$app.anth"
+    echo "./system-org.anthracite.$app.anth" >> "$list"
+    if [ -f "$release/demo/$app.anth" ]; then
+        cp "$release/demo/$app.anth" "$out/demo-org.anthracite.$app.anth"
+        echo "./demo-org.anthracite.$app.anth" >> "$list"
+    else
+        case " accounts firewall fs home net proc storage terminal " in
+            *" $app "*)
+                echo "missing demo bundle $release/demo/$app.anth" >&2
+                exit 1
+                ;;
+        esac
+    fi
 done
 
 for bundle in "$out"/*.anth; do
@@ -95,12 +113,12 @@ for bundle in "$out"/*.anth; do
     fi
 done
 
+count=$(wc -l < "$list" | tr -d ' ')
 (
     cd "$out"
-    sha256sum ./*.anth > SHA256SUMS
-    tar -czf "anthracite-$version-bundles.tar.gz" \
-        ./system-*.anth ./demo-*.anth SHA256SUMS
+    xargs sha256sum < .bundles > SHA256SUMS
+    tar -czf "anthracite-$version-bundles.tar.gz" -T .bundles SHA256SUMS
+    rm -f .bundles
 )
-
-echo "bundles: wrote $out ($version, 16 apps, key $(printf '%s' "$public" | cut -c1-12)…)"
+echo "bundles: wrote $out ($version, $count bundles, key $(printf '%s' "$public" | cut -c1-12)…)"
 echo "bundles: $out/anthracite-$version-bundles.tar.gz"
