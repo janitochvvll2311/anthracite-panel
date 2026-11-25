@@ -16,3 +16,7 @@ Decisiones registradas durante la implementación de features.
 | [0010](0010-how-do-exec-sessions-work-and-how-is-the-runtime-tested-without-.md) | 2026-11-25 | How do exec sessions work and how is the runtime tested without Docker? |
 | [0011](0011-where-does-the-store-s-catalogue-trust-live-and-who-installs.md) | 2026-11-25 | Where does the store's catalogue trust live and who installs? |
 | [0012](0012-when-is-a-bundle-digest-checked-relative-to-the-download-stream.md) | 2026-11-25 | When is a bundle digest checked relative to the download stream? |
+| [0013](0013-what-is-the-public-sdk-surface-for-third-party-anthracite-apps.md) | 2026-11-25 | What is the public SDK surface for third-party Anthracite apps? |
+| [0014](0014-how-is-the-anthracite-cli-integrated-into-cargo-and-bun.md) | 2026-11-25 | How is the Anthracite CLI integrated into cargo and Bun? |
+| [0015](0015-what-code-is-shared-between-the-engine-and-the-sdk-tools.md) | 2026-11-25 | What code is shared between the engine and the SDK tools? |
+| [0016](0016-how-are-engine-sdk-and-wit-versions-aligned.md) | 2026-11-25 | How are engine, SDK and WIT versions aligned? |

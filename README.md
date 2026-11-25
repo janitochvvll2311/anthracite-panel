@@ -21,6 +21,14 @@ the manager handoff. The `v0.6` line remains the M4–M5 proof: service apps on 
 v3 manifest, streams and quotas, the `system` tier with a compiled distribution
 key and a signing ceremony, the sandbox baseline and the external-bundle acid
 test.
+
+The **v0.8.0** line is the third-party SDK: one Rust CLI with `cargo anth` and
+`anth`, publishable crates (`anth-error`, `anth-guest`, `anth-service`, `anth-client`,
+`anth-bundle`, `cargo-anth`) and npm packages under `@anth-panel`, plus
+standalone templates. The contract is
+[`docs/design/31-sdk-distribution.md`](docs/design/31-sdk-distribution.md); the
+packages are not published yet.
+
 The design of record is [`DESIGN.md`](DESIGN.md); the official manual is
 [`docs/guide/`](docs/guide/README.md).
 

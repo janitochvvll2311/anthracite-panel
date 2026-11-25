@@ -9,6 +9,11 @@ The design of record lives separately: [`DESIGN.md`](../../DESIGN.md) and the
 way, and their decisions are binding. The guide links to them where the reason
 matters; it does not repeat the whole design.
 
+The `v0.8.0` line adds the third-party SDK (`cargo anth` / `anth` and
+`bunx @anth-panel/cli`). Its contract is
+[§31](../design/31-sdk-distribution.md); the install commands are documented
+when the packages are published.
+
 ## Reading paths
 
 **Operator.** [Installation](installation.md) → [Configuration](configuration.md)

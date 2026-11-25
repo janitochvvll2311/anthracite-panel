@@ -34,7 +34,8 @@ and a change to one of them is a design change, not an implementation detail.
   transport question rather than a redesign.
 - **v0.5.0 ships M0–M3**: the platform, a minimal official panel and the apps that
   prove both. v0.6.0 adds the system and third-party app proof; v0.7.0 scopes the
-  business apps in [§21](docs/design/21-next-version-apps.md).
+  business apps in [§21](docs/design/21-next-version-apps.md); v0.8.0 turns the
+  SDK into installable crates and npm packages ([§31](docs/design/31-sdk-distribution.md)).
 - **The acid test**: an app written outside the engine tree appears and answers
   inside a panel that was never compiled against it, with zero changes to engine
   code.
@@ -75,6 +76,7 @@ and a change to one of them is a design change, not an implementation detail.
 | 28 | [Service sandbox and Pulley](docs/design/28-service-sandbox.md) | Threat model, layers, per-class policy, failure semantics and the Pulley decision |
 | 29 | [The v0.7.0 plan](docs/design/29-v0.7-plan.md) | Phases for M6: v4 intent, sandbox L1, broker, the five apps and the release gate |
 | 30 | [Official app conventions](docs/design/30-official-app-conventions.md) | The shape the official apps share: layout, service, web family, tests and release |
+| 31 | [SDK distribution](docs/design/31-sdk-distribution.md) | The public crates and npm packages, the cargo/Bun entry points, versioning and the publish gate |
 | A | [Vertical slice](docs/design/appendix-a-vertical-slice.md) | `hello` end to end: install, approve, compose, call |
 
 ---
@@ -88,6 +90,7 @@ and a change to one of them is a design change, not an implementation detail.
 | Writing a panel | 5 → 6 → 7 (7.7, 7.14) → 10 |
 | Operating a deployment | 6 (6.4, 6.5) → 8 → 9 → 15 |
 | Planning v0.7.0 | 18 → 21 → 22 → 15 |
+| Distributing the SDK | 31 → 10 → 12 |
 | Reviewing a change | 16, then the document for the area |
 
 ---

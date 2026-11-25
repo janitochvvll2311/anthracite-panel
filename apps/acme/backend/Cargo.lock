@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "anth-contract"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "humantime",
  "semver",
@@ -47,7 +47,7 @@ dependencies = [
 
 [[package]]
 name = "anth-service"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anth-contract",
  "base64",
@@ -302,7 +302,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

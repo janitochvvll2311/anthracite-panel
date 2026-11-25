@@ -176,13 +176,29 @@ through the manager with an explicit approval; and removing any of the five
 leaves a working system with only the expected degraded section — asserted by
 the golden edge composition.
 
-**Status (v0.7.0):** code-complete. The five apps, the platform prerequisites and
-the sandbox shipped through
+**Status (v0.7.0):** shipped and tagged at `1f09a3a`. The five apps, the platform
+prerequisites and the sandbox shipped through
 [`docs/design/29-v0.7-plan.md`](29-v0.7-plan.md); the removal matrix is
-`engine/api/tests/golden.rs`, and the release gate and manual QA are
+`engine/api/tests/golden.rs`, the release gate and manual QA are
 [`docs/guide/release-notes.md`](../guide/release-notes.md) and
-[`docs/guide/edge-qa.md`](../guide/edge-qa.md). The tag is cut after the
-hardening phase merges.
+[`docs/guide/edge-qa.md`](../guide/edge-qa.md), and the close report is
+[`docs/features/v0-7-0/report.md`](../features/v0-7-0/report.md).
+
+### v0.8.0 — the third-party SDK
+
+> **Contract:** [§31](31-sdk-distribution.md). Status: **in progress**; the
+> packages are not published yet.
+
+v0.8.0 turns the public repository into an installable SDK. One Rust CLI
+(`cargo anth` / `anth`) and one npm entry point (`bunx @anth-panel/cli`) create,
+build, package, sign and verify apps outside this repository. The public crates
+are `anth-error`, `anth-bundle`, `anth-guest`, `anth-service`, `anth-client` and
+`cargo-anth`; the npm packages live under `@anth-panel`. The engine and its
+authority stay internal.
+
+**Done when:** `cargo install cargo-anth` and `bunx @anth-panel/cli` work in a
+clean environment, the templates build/sign/verify without the monorepo, and the
+compatibility matrix is documented.
 
 ### The platform's definition of done
 

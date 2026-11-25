@@ -10,7 +10,7 @@ and to the design where the reason matters.
 
 ## State
 
-`v0.7.0` is the current release line: manifest v4, sandbox L1 and the port
+`v0.7.0` is the last shipped release: manifest v4, sandbox L1 and the port
 capability, the broker/audit/surface exports, and the five edge apps (`certs`,
 `acme`, `proxy`, `containers`, `store`). The edge composition is
 `compositions/edge.toml`; the removal matrix is
@@ -18,9 +18,14 @@ capability, the broker/audit/surface exports, and the five edge apps (`certs`,
 `docs/guide/release-notes.md` and `docs/guide/edge-qa.md`. The close report is
 `docs/features/v0-7-0/report.md`.
 
-The previous `v0.6` line is preserved in tags and the guide. `v0.4.0` is frozen
-at tag `v0.4.0-freeze`. It is reference only: do not copy its code, its crates or
-its structure.
+The `v0.8.0` line is the third-party SDK: `cargo anth` / `anth` for Rust and
+`bunx @anth-panel/cli` for Bun, with publishable crates and npm packages under
+the `anth-panel` owner. The contract is
+`docs/design/31-sdk-distribution.md` and ADRs 0013–0016; the packages are not
+published yet. The line branches from `main` after `v0.7.0`.
+
+Previous lines are preserved in the design, the guide and the feature reports;
+their tags are not guaranteed to exist. Do not copy code from an old line.
 
 ## Tags
 
@@ -28,10 +33,9 @@ Intermediate publishes of a version append a letter: `vX.Y.Za`, `vX.Y.Zb`,
 `vX.Y.Zc`, in order, with no separator (as `v0.3.0a` did). The unsuffixed
 `vX.Y.Z` is the **final** publish of that version and is cut last, once the line
 is done: the suffix means "not final yet", not "after the release". The letter is
-the publish count, not a stability label. Do not add more `-pre.N` tags:
-`v0.6.0-pre.1` to `v0.6.0-pre.3` stay as they are and `v0.6.0` is the final tag
-of its line; the next line starts at `v0.7.0a`. A tag is cut from the branch it
-publishes and is never moved or reused.
+the publish count, not a stability label. Do not add more `-pre.N` tags.
+`v0.7.0` is the final tag of the 0.7 line; the next line starts at `v0.8.0a`.
+A tag is cut from the branch it publishes and is never moved or reused.
 
 ## Toolchain
 
