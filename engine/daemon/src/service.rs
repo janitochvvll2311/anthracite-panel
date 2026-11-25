@@ -817,7 +817,21 @@ fn spawn(service: &Service) -> Result<Child, Error> {
             Ok(())
         });
     }
-    let spawned = command.spawn();
+    // A fork in a sibling thread can inherit the staged file while it is still
+    // open for writing, and `exec` then answers ETXTBSY. The kernel treats it
+    // as transient: retry before declaring the launch denied.
+    let spawned = {
+        let mut attempt = 0u32;
+        loop {
+            match command.spawn() {
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 4 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20 * u64::from(attempt)));
+                }
+                other => break other,
+            }
+        }
+    };
     // SAFETY: the child has its own copy of the descriptor; the parent must not
     // leak it across restarts.
     unsafe {
