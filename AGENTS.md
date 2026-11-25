@@ -57,7 +57,7 @@ publishes and is never moved or reused.
   and feeds the codegen. `cargo-component` is not needed.
 - Bun `1.4.4` under `/tools/bun` (`BUN_INSTALL=/tools/bun`).
 - If a wrapper is missing after an environment rebuild, run `. /tools/env.sh`.
-- The three Rust workspaces share one `build.target-dir` through the root
+- The four Rust workspaces share one `build.target-dir` through the root
   `.cargo/config.toml`. Do not add per-workspace targets.
 
 ## Workspaces

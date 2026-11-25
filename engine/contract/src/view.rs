@@ -261,11 +261,11 @@ pub struct DegradedApp {
     pub app: AppId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// `unapproved`, `grant-stale`, `grant-invalid`, `disabled`, `blocked` or
-    /// `risk-grown` (§8.5).
+    /// `unapproved`, `grant-stale`, `grant-invalid`, `disabled`, `blocked`,
+    /// `unresolved` or `risk-grown` (§8.5).
     pub reason: String,
-    /// The interface and provider of a block, or the approved and effective
-    /// risk that grew.
+    /// The interface and provider of a block, the interface of an unresolved
+    /// import, or the approved and effective risk that grew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<serde_json::Value>,
 }

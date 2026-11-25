@@ -68,7 +68,7 @@ the variants, the Docker images and the source build.
 
 ## Build from source
 
-Requirements: Linux, Rust 1.99.1, Bun 1.4.4 and `wasm-tools`. The three Rust
+Requirements: Linux, Rust 1.99.1, Bun 1.4.4 and `wasm-tools`. The four Rust
 workspaces share one target directory through the root `.cargo/config.toml`.
 
 ```sh

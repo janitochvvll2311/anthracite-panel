@@ -83,12 +83,23 @@ for bundle in "$release/bundles"/*.anth; do
     apps="$apps $app"
 done
 [ -n "$apps" ] || { echo "no bundles in $release/bundles" >&2; exit 1; }
+list=$out/.bundles
+: > "$list"
 for app in $apps; do
     source=$release/bundles/$app.anth
     [ -f "$source" ] || { echo "missing $source" >&2; exit 1; }
     cp "$source" "$out/system-org.anthracite.$app.anth"
+    echo "./system-org.anthracite.$app.anth" >> "$list"
     if [ -f "$release/demo/$app.anth" ]; then
         cp "$release/demo/$app.anth" "$out/demo-org.anthracite.$app.anth"
+        echo "./demo-org.anthracite.$app.anth" >> "$list"
+    else
+        case " accounts firewall fs home net proc storage terminal " in
+            *" $app "*)
+                echo "missing demo bundle $release/demo/$app.anth" >&2
+                exit 1
+                ;;
+        esac
     fi
 done
 
@@ -102,16 +113,12 @@ for bundle in "$out"/*.anth; do
     fi
 done
 
+count=$(wc -l < "$list" | tr -d ' ')
 (
     cd "$out"
-    sha256sum ./*.anth > SHA256SUMS
-    set -- ./system-*.anth ./SHA256SUMS
-    if [ -e ./demo-org.anthracite.accounts.anth ]; then
-        set -- "$@" ./demo-*.anth
-    fi
-    tar -czf "anthracite-$version-bundles.tar.gz" "$@"
+    xargs sha256sum < .bundles > SHA256SUMS
+    tar -czf "anthracite-$version-bundles.tar.gz" -T .bundles SHA256SUMS
+    rm -f .bundles
 )
-
-count=$(ls "$out"/*.anth | wc -l | tr -d ' ')
 echo "bundles: wrote $out ($version, $count bundles, key $(printf '%s' "$public" | cut -c1-12)…)"
 echo "bundles: $out/anthracite-$version-bundles.tar.gz"

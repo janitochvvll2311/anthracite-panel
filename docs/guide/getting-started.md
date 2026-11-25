@@ -47,7 +47,7 @@ sha256sum -c SHA256SUMS
 ## Option B: from source
 
 Requirements: Linux, Rust 1.99.1 with the `wasm32-unknown-unknown` target, Bun
-1.4.4 and `wasm-tools`. The three Rust workspaces share one target directory
+1.4.4 and `wasm-tools`. The four Rust workspaces share one target directory
 through the root `.cargo/config.toml`.
 
 ```sh

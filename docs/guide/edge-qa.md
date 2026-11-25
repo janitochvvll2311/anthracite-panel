@@ -1,6 +1,6 @@
 # Edge composition: manual QA
 
-The automated half of the release gate is the local suite: three Rust
+The automated half of the release gate is the local suite: four Rust
 workspaces, the browser e2e against a running panel, the golden removal matrix
 and the edge composition. The rows below are what a human runs on a deployment
 host before `v0.7.0` is published. They are not claims: a row that was not run
@@ -11,7 +11,7 @@ is recorded as not run.
 1. Build the release with a real key: `scripts/release.sh --key <private-key>`.
    It produces the keyed binaries and the signed bundles, including `certs`,
    `acme`, `proxy`, `containers` and `store`, and verifies each bundle's tier.
-2. Install the 13 bundles of `compositions/edge.toml`, approve each with its
+2. Install the 12 bundles of `compositions/edge.toml`, approve each with its
    declared class, and copy the composition to `$state/composition.toml`.
 3. Keep `[composition] allow-degraded = false` for the normal run; turn it on
    for the removal rows, as the table says.
@@ -32,7 +32,7 @@ is recorded as not run.
 | 10 | Store: local source | configure a `native` source over a directory or loopback HTTPS, search, install | the manager shows the digest, risk and signer; approval installs the bundle |
 | 11 | Store: remote source | configure a `github`-shaped or HTTPS source | the index verifies, a bundle downloads, the same handoff runs |
 | 12 | Tampered bundle | flip a byte in the cached bundle and download again | the store refuses before the first chunk and evicts the cache entry; the manager never sees a bundle |
-| 13 | Removal matrix | remove `certs`, `proxy`, `acme`, `containers` and `store` one at a time, then all five; set `allow-degraded = true` when a consumer stays composed | `certs`: proxy keeps published files, ACME reports `issued-unstored`; `proxy`: HTTP-01 fails its self-check, DNS-01 still works; `acme`: no renewals; the rest are independent; all five boots as v0.6.0 |
+| 13 | Removal matrix | remove `certs`, `proxy`, `acme`, `containers` and `store` one at a time, then all five; set `allow-degraded = true` when a consumer stays composed | `certs`: the proxy keeps published files and `acme` degrades with `unresolved` (it does not run); `proxy`: HTTP-01 fails its self-check, DNS-01 still works; `acme`: no renewals; `containers` and `store`: no other degradation; all five leaves the seven system apps of `edge.toml` running |
 | 14 | No secrets anywhere | grep the routes, logs, audit records, crash dumps and the panel HTML for PEM blocks, tokens, `Authorization`, container env values | nothing found |
 
 ## Automated evidence
@@ -43,16 +43,19 @@ Run these first; they cover the reproducible half.
 (cd engine && cargo test --workspace)
 (cd sdk/rust && cargo test --workspace)
 (cd panel/backend && cargo test --workspace)
-(cd apps/store/backend && cargo test)          # unit + loopback
+(cd apps/certs/backend && cargo test)          # PEM, key match, expiry
 (cd apps/acme/backend && cargo test)           # RFC 8555 fixture
+(cd apps/proxy/backend && cargo test)          # routes, apply/rollback
 (cd apps/containers/backend && cargo test)     # Engine API fixture
+(cd apps/store/backend && cargo test)          # unit + loopback
 (cd engine && cargo test -p anth-api --test golden)  # removal matrix
 
 scripts/acid-test.sh                            # external bundle
 scripts/acme-pebble.sh --run                    # terminal 1
-ANTH_PEBBLE_DIRECTORY=https://localhost:14000/dir \
-ANTH_PEBBLE_CA=/tmp/anthracite-panel/pebble/test/certs/pebble.minica.pem \
-    (cd apps/acme/backend && cargo test --test pebble -- --ignored)
+(cd apps/acme/backend && \
+    ANTH_PEBBLE_DIRECTORY=https://localhost:14000/dir \
+    ANTH_PEBBLE_CA=/tmp/anthracite-panel/pebble/test/certs/pebble.minica.pem \
+    cargo test --test pebble -- --ignored)
 
 (cd tests/e2e && ANTH_PANEL_URL=... ANTH_PANEL_PASSWORD=... \
     ANTH_CONTAINERS_FIXTURE=1 ANTH_STORE_FIXTURE=1 \
