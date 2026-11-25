@@ -1024,14 +1024,13 @@ async fn a_websocket_route_streams_and_writes() {
     let (state, dir) = apps_state_with(&["org.example.notes"]);
     write_grant(&dir, &grant_toml(&dir));
     let writes = Arc::new(StdMutex::new(Vec::new()));
-    let state = Arc::new(
-        Arc::try_unwrap(state)
-            .ok()
-            .expect("unique state")
-            .with_caller(Arc::new(WsCaller {
-                writes: Arc::clone(&writes),
-            })),
-    );
+    let mut state = Arc::try_unwrap(state).ok().expect("unique state");
+    // The client below is this process over a real socket, so the peer uid is
+    // ours. CI does not run as root, unlike a local root shell.
+    state.allowed_uid = current_euid();
+    let state = Arc::new(state.with_caller(Arc::new(WsCaller {
+        writes: Arc::clone(&writes),
+    })));
 
     let path = dir.join("engine.sock");
     let listener = UnixListener::bind(&path).expect("bind");
