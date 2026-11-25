@@ -74,8 +74,10 @@ apps/<app>/
   `/__anth/call`. Implement `Handler::call` (synchronous; the SDK runs it on
   the blocking pool) and `Handler::stream` (must not block in `poll_next`).
 - Parse `--socket`, `--data`, `--shared`, `--broker` and the class-specific
-  arguments from `argv`; there is no environment or stdio. Reject unknown
-  arguments with exit 2.
+  arguments from `argv`; there is no environment or stdio. A missing required
+  argument exits 2. Unknown extras are currently ignored, like the shipped
+  services do: a strict parser in `anth-service` is still pending, and until it
+  lands a service must not depend on unknown arguments being rejected.
 - Return `serde_json::Value` with kebab-case keys matching the WIT records; use
   the contract error constructors (`invalid`, `not_found`, `unavailable`,
   `conflict`, …). Validation errors name the field path.
@@ -114,7 +116,10 @@ The visual grammar every official view follows:
   ids, paths and fingerprints in `ui-monospace` at 12 px. No external fonts.
 - **Colour.** The tokens above; the accent marks focus, selection and links,
   never decoration. Status is `good` / `warn` / `danger`; a neutral badge uses
-  `--muted`.
+  `--muted`. `apps/proxy` is fully tokenised and is the example to copy. The
+  older modules (`certs`, `firewall`, `accounts`) still carry literal hex values
+  from before the frame mirrored the palette; new work uses the tokens, and
+  migrating those modules is pending.
 - **Spacing and shape.** 4/8/12/14 px gaps, 1 px borders in `--line`, radii 7 px
   for controls and 9–12 px for cards. Shadows are the panel's, not a new one.
 - **Buttons.** 12 px, 5–6 px vertical padding, 10–12 px horizontal, radius 7,
@@ -148,7 +153,8 @@ The visual grammar every official view follows:
   innermost dialog.
 - **Test hooks.** Stable `data-testid` values for the controls an app e2e drives
   (`proxy-view`, `proxy-host`, `proxy-apply`, …); the spec maps them in a page
-  object and never selects a class. Panel-wide ids live in §10's SDK map.
+  object and never selects a class. Panel-wide ids live in §12's testing map
+  (`sdk/ts/panel/src/testids.ts`).
 
 The module contract itself: `mount(root, ctx)` synchronously returns a dispose
 function, does not await the network before returning, and uses `ctx.fetch` only

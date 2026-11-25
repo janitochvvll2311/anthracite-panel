@@ -116,13 +116,14 @@ CLI: `anth app proxy status|hosts|routes|reload`.
 The panel view has four sections (listeners, hosts & routes, upstreams, access
 log). Add and Edit both use the panel's modal slots: the FAB offers **Add
 host**, **Add upstream** and **Apply draft**, each host card and upstream row
-opens its own modal for editing, and each host adds/edits routes and listeners
-through the route and listener modals. A modal hands the edited piece to the
-view with `openView` params, so the change stays a draft until the operator
+opens its own modal for editing, a host's routes use the route modal and the
+Listeners section uses the listener modal. A modal hands the edited piece to
+the view with `openView` params, so the change stays a draft until the operator
 applies it; adding a host or upstream with an existing id is refused instead of
-overwriting it. On a panel without `panel.modal` the view is read-only (Apply
-and the Remove actions are disabled) and it says so; the document can still be
-edited through the API.
+overwriting it. On a panel without `panel.modal` the view is read-only: Apply
+is disabled with an explanation, the Remove actions are not rendered, and the
+view says it cannot edit here; the document can still be edited through the
+API.
 
 ## Build and test
 

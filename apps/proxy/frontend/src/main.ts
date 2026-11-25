@@ -70,10 +70,10 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   box.innerHTML = `
     <div class="px-bar">
       <div class="px-tabs" role="tablist">
-        <button type="button" role="tab" data-section="listeners" data-testid="proxy-tab-listeners">Listeners</button>
-        <button type="button" role="tab" data-section="hosts" data-testid="proxy-tab-hosts">Hosts &amp; routes</button>
-        <button type="button" role="tab" data-section="upstreams" data-testid="proxy-tab-upstreams">Upstreams</button>
-        <button type="button" role="tab" data-section="log" data-testid="proxy-tab-log">Access log</button>
+        <button type="button" role="tab" aria-selected="false" data-section="listeners" data-testid="proxy-tab-listeners">Listeners</button>
+        <button type="button" role="tab" aria-selected="false" data-section="hosts" data-testid="proxy-tab-hosts">Hosts &amp; routes</button>
+        <button type="button" role="tab" aria-selected="false" data-section="upstreams" data-testid="proxy-tab-upstreams">Upstreams</button>
+        <button type="button" role="tab" aria-selected="false" data-section="log" data-testid="proxy-tab-log">Access log</button>
       </div>
       <span class="grow"></span>
       <span class="px-badge" data-running>—</span>
@@ -289,7 +289,9 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
     box
       .querySelectorAll<HTMLButtonElement>("[data-section]")
       .forEach((button) => {
-        button.classList.toggle("active", button.dataset.section === section);
+        const current = button.dataset.section === section;
+        button.classList.toggle("active", current);
+        button.setAttribute("aria-selected", String(current));
       });
   }
 

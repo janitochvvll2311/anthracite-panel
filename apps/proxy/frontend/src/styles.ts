@@ -3,75 +3,75 @@ export const styles = `
   .px-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .px-field-name {
     display: none; font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
-    color: #7a8497;
+    color: var(--muted-2);
   }
   .px-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .px-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .px-tabs { display: flex; gap: 4px; }
   .px-tabs button {
-    padding: 5px 10px; border-radius: 7px; border: 1px solid #2a3142;
-    background: #11151d; color: #98a2b6; font: inherit; font-size: 12px; cursor: pointer;
+    padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--bg-soft); color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
   }
-  .px-tabs button.active { border-color: #4a5c82; background: #151d2c; color: #fff; }
+  .px-tabs button.active { border-color: var(--accent); background: var(--panel-2); color: var(--text); }
   .grow { flex: 1; }
   .px button {
-    padding: 5px 10px; border-radius: 7px; border: 1px solid #2a3142;
-    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+    padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
   }
-  .px button:hover { border-color: #4a5c82; color: #fff; }
-  .px button.primary { border-color: #33507a; background: #16233a; color: #dbe6ff; }
-  .px button.danger { border-color: #5c2b31; color: #ffb3ba; }
-  .px-status { margin: 0; font-size: 12px; color: #8f98ab; min-height: 16px; }
-  .px-status.bad { color: #ffb3ba; }
+  .px button:hover { border-color: var(--accent); color: var(--text); }
+  .px button.primary { border-color: var(--accent); background: var(--panel-3); color: var(--text); }
+  .px button.danger { border-color: var(--danger); color: var(--danger); }
+  .px-status { margin: 0; font-size: 12px; color: var(--muted); min-height: 16px; }
+  .px-status.bad { color: var(--danger); }
   .px-banner {
-    padding: 8px 10px; border-radius: 7px; border: 1px solid #5c2b31;
-    background: #241214; color: #ffb3ba; font-size: 12px;
+    padding: 8px 10px; border-radius: 7px; border: 1px solid var(--danger);
+    background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--danger); font-size: 12px;
   }
-  .px-note { font-size: 12px; color: #8f98ab; }
-  .px-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #8f98ab; }
+  .px-note { font-size: 12px; color: var(--muted); }
+  .px-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
   .px-section { display: flex; flex-direction: column; gap: 12px; }
   .px-card {
-    border: 1px solid #232a38; border-radius: 9px; padding: 10px 12px;
-    background: #0f131a; display: flex; flex-direction: column; gap: 8px;
+    border: 1px solid var(--line-soft); border-radius: 9px; padding: 10px 12px;
+    background: var(--panel); display: flex; flex-direction: column; gap: 8px;
   }
   .px-card-head { display: flex; align-items: center; gap: 8px; }
-  .px-card-head strong { color: #dfe5f1; font-size: 13px; }
+  .px-card-head strong { color: var(--text); font-size: 13px; }
   .px-grid {
     display: grid; grid-template-columns: 90px 1fr 90px 90px 70px 140px;
     gap: 8px; align-items: center; font-size: 12px;
   }
   .px-grid.hosts { grid-template-columns: 90px 1fr 140px 70px 70px 70px 60px; }
-  .px-grid.head { color: #7a8497; font-size: 11px; }
+  .px-grid.head { color: var(--muted-2); font-size: 11px; }
   .px-grid input[type="text"], .px-grid input[type="number"], .px-grid select {
-    width: 100%; padding: 4px 6px; border-radius: 6px; border: 1px solid #2a3142;
-    background: #11151d; color: #d6dcea; font: inherit; font-size: 12px;
+    width: 100%; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--bg-soft); color: var(--text); font: inherit; font-size: 12px;
   }
   .px-form {
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-    padding-top: 4px; border-top: 1px dashed #232a38;
+    padding-top: 4px; border-top: 1px dashed var(--line-soft);
   }
   .px-form input[type="text"], .px-form input[type="number"], .px-form select {
-    padding: 4px 6px; border-radius: 6px; border: 1px solid #2a3142;
-    background: #11151d; color: #d6dcea; font: inherit; font-size: 12px;
+    padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--bg-soft); color: var(--text); font: inherit; font-size: 12px;
   }
-  .px-check { display: inline-flex; align-items: center; gap: 4px; color: #98a2b6; }
+  .px-check { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
   .px-log {
     display: flex; flex-direction: column; gap: 2px; max-height: 46vh;
-    overflow: auto; border: 1px solid #232a38; border-radius: 8px; background: #0d1117;
+    overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg);
   }
   .px-event {
     display: grid; grid-template-columns: 64px 120px 60px 1fr 60px 60px 70px;
     gap: 8px; padding: 4px 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11.5px; color: #b9c2d4; border-bottom: 1px solid #141a24;
+    font-size: 11.5px; color: var(--text); border-bottom: 1px solid var(--line-soft);
   }
-  .px-event .bad { color: #ffb3ba; }
+  .px-event .bad { color: var(--danger); }
   .px-badge {
-    padding: 1px 7px; border-radius: 999px; border: 1px solid #2a3142;
-    font-size: 11px; color: #98a2b6;
+    padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line);
+    font-size: 11px; color: var(--muted);
   }
-  .px-badge.ok { border-color: #2f5a3f; color: #93d9ab; }
-  .px-badge.bad { border-color: #5c2b31; color: #ffb3ba; }
-  .px-empty { padding: 10px; color: #7a8497; font-size: 12px; }
+  .px-badge.ok { border-color: var(--good); color: var(--good); }
+  .px-badge.bad { border-color: var(--danger); color: var(--danger); }
+  .px-empty { padding: 10px; color: var(--muted-2); font-size: 12px; }
   .px-card { min-width: 0; }
 
   /* The panel's explicit developer modes reach the frame as

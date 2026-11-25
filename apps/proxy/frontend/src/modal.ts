@@ -11,21 +11,21 @@ import type {
 
 const extra = `
   .pxm { display: flex; flex-direction: column; gap: 12px; }
-  .pxm label { display: flex; flex-direction: column; gap: 4px; color: #98a2b6; font-size: 12px; }
+  .pxm label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
   .pxm input[type="text"], .pxm input[type="number"], .pxm select {
-    width: 100%; padding: 6px 8px; border-radius: 7px; border: 1px solid #2a3142;
-    background: #11151d; color: #d6dcea; font: inherit; font-size: 13px;
+    width: 100%; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--bg-soft); color: var(--text); font: inherit; font-size: 13px;
   }
-  .pxm input:disabled { color: #7a8497; }
+  .pxm input:disabled { color: var(--muted-2); }
   .pxm-row { display: flex; gap: 14px; flex-wrap: wrap; }
   .pxm-actions { display: flex; gap: 8px; justify-content: flex-end; }
   .pxm button {
-    padding: 6px 12px; border-radius: 7px; border: 1px solid #2a3142;
-    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+    padding: 6px 12px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
   }
-  .pxm button.primary { border-color: #33507a; background: #16233a; color: #dbe6ff; }
-  .pxm-status { margin: 0; font-size: 12px; color: #8f98ab; }
-  .pxm-status.bad { color: #ffb3ba; }
+  .pxm button.primary { border-color: var(--accent); background: var(--panel-3); color: var(--text); }
+  .pxm-status { margin: 0; font-size: 12px; color: var(--muted); }
+  .pxm-status.bad { color: var(--danger); }
   @media (max-width: 720px) {
     .pxm-actions { flex-direction: column-reverse; }
     .pxm-actions button { width: 100%; }

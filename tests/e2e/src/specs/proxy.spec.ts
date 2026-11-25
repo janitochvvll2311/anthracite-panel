@@ -54,6 +54,14 @@ test("the proxy view stays usable in the three viewport modes", async ({
   }
 
   await slot.frame.getByTestId("proxy-tab-hosts").click();
+  await expect(slot.frame.getByTestId("proxy-tab-hosts")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(slot.frame.getByTestId("proxy-tab-log")).toHaveAttribute(
+    "aria-selected",
+    "false",
+  );
 });
 
 test("the proxy add and edit actions use modals from the FAB", async ({
