@@ -54,6 +54,19 @@ pub struct Config {
     pub services: ServicesSection,
     #[serde(default)]
     pub limits: LimitsSection,
+    #[serde(default)]
+    pub composition: CompositionSection,
+}
+
+/// Composition resolution policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompositionSection {
+    /// Boot with an import that has no provider, degrading the consumer instead
+    /// of refusing the whole document. An operator sets this to remove one of
+    /// the five edge apps while its consumer stays composed (§8.5).
+    #[serde(rename = "allow-degraded", default)]
+    pub allow_degraded: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -427,6 +440,15 @@ mod tests {
         let text = TEMPLATE.replace("level = \"info\"", "level = \"info\"\nlvel = \"debug\"");
         let error = Config::parse(&text).expect_err("unknown key");
         assert!(error.message().contains("lvel"), "{error}");
+    }
+
+    #[test]
+    fn degraded_composition_is_an_explicit_opt_in() {
+        assert!(!Config::release().composition.allow_degraded);
+        let text = TEMPLATE.replace("allow-degraded = false", "allow-degraded = true");
+        let config = Config::parse(&text).expect("parse");
+        assert!(config.composition.allow_degraded);
+        assert!(config.validate(Profile::Release).is_ok());
     }
 
     #[test]

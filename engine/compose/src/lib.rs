@@ -126,6 +126,9 @@ pub enum DegradedReason {
         interface: InterfaceId,
         provider: AppId,
     },
+    /// An import has no provider at all. Only possible when the caller allowed
+    /// degradation: the strict rule is a fatal resolution (§8.5).
+    Missing { interface: InterfaceId },
     /// The effective risk grew past what the grant approved: the app is blocked
     /// until it is re-approved (D-Risk-Recheck).
     RiskGrown { approved: Risk, effective: Risk },
@@ -140,6 +143,7 @@ impl DegradedReason {
             Self::GrantInvalid => "grant-invalid",
             Self::Disabled => "disabled",
             Self::Blocked { .. } => "blocked",
+            Self::Missing { .. } => "unresolved",
             Self::RiskGrown { .. } => "risk-grown",
         }
     }
@@ -366,10 +370,31 @@ impl Entry {
     }
 }
 
+/// How a caller wants an unresolved import treated.
+///
+/// The strict default is the composition rule of §8.5: an import with no
+/// candidate is fatal because editing the composition fixes it without a
+/// running engine. `allow_degraded` is the operator's explicit choice for a
+/// removal: the consumer stops and the rest of the composition boots, so the
+/// degradation can be inspected and repaired from the panel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResolveOptions {
+    pub allow_degraded: bool,
+}
+
 /// Resolves a composition into the apps that run, in boot order.
 pub fn resolve(
     composition: &Composition,
     installed: &[InstalledApp],
+) -> Result<Resolution, ResolutionError> {
+    resolve_with(composition, installed, ResolveOptions::default())
+}
+
+/// Resolves with an explicit policy for imports that have no provider.
+pub fn resolve_with(
+    composition: &Composition,
+    installed: &[InstalledApp],
+    options: ResolveOptions,
 ) -> Result<Resolution, ResolutionError> {
     composition
         .validate()
@@ -501,18 +526,34 @@ pub fn resolve(
     // checked before blocking: unresolved is a hole in the composition, and a
     // composition that would not boot must not look bootable because the app
     // that shows the hole is also blocked.
+    let mut missing: Vec<(AppId, InterfaceId)> = Vec::new();
     for entry in &composed {
         if !running.contains(&entry.id) {
             continue;
         }
         for import in &entry.imports {
             if !exporters.contains_key(import) && !catalog::is_native(import) {
-                return Err(ResolutionError::UnresolvedImport {
-                    app: entry.id.to_string(),
-                    interface: import.to_string(),
-                });
+                if !options.allow_degraded {
+                    return Err(ResolutionError::UnresolvedImport {
+                        app: entry.id.to_string(),
+                        interface: import.to_string(),
+                    });
+                }
+                missing.push((entry.id.clone(), import.clone()));
             }
         }
+    }
+    // The operator opted into degradation: the consumer stops and keeps the
+    // missing interface as its reason, so the panel can name the edit that
+    // repairs it.
+    for (app, interface) in missing {
+        running.remove(&app);
+        degraded.insert(
+            app,
+            Degraded {
+                reason: DegradedReason::Missing { interface },
+            },
+        );
     }
 
     // Steps 6 and 7 plus D-Risk-Recheck. An app whose effective risk grew past
@@ -1001,6 +1042,25 @@ mod tests {
             ResolutionError::UnresolvedImport {
                 app: CONSUMER.to_string(),
                 interface: "example:other/x@1.0.0".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_unresolved_import_degrades_when_the_operator_allows_it() {
+        let resolution = resolve_with(
+            &composition(&[CONSUMER]),
+            &[consumer(&["example:other/x@1.0.0"])],
+            ResolveOptions {
+                allow_degraded: true,
+            },
+        )
+        .expect("degraded resolve");
+        assert!(resolution.order.is_empty());
+        assert_eq!(
+            resolution.degraded[&app(CONSUMER)].reason,
+            DegradedReason::Missing {
+                interface: InterfaceId::parse("example:other/x@1.0.0").expect("interface"),
             }
         );
     }

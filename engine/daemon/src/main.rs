@@ -181,6 +181,7 @@ async fn run(args: Args) -> Result<(), Error> {
     let state = Arc::new(
         anth_api::EngineState::new(allowed_uid)
             .with_composition(composition)
+            .allow_degraded(config.composition.allow_degraded)
             .with_apps(
                 &config.state,
                 config.apps.max_bundle_bytes,
@@ -257,11 +258,14 @@ async fn run(args: Args) -> Result<(), Error> {
         &services,
         &config.state,
         &composition,
-        config.services.allow_third_party,
-        &config.limits,
-        LogSettings {
-            level: config.log.level,
-            format: config.log.format,
+        anth_engine::boot::BootOptions {
+            allow_degraded: config.composition.allow_degraded,
+            allow_third_party_service: config.services.allow_third_party,
+            limits: &config.limits,
+            log: LogSettings {
+                level: config.log.level,
+                format: config.log.format,
+            },
         },
     )
     .await?;

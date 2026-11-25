@@ -13,13 +13,17 @@ use std::sync::Arc;
 use anth_api::{router, EngineState, PeerUid};
 use anth_compose::audit::AuditLog;
 use anth_compose::grant::GrantStore;
-use anth_compose::keys::Distribution;
+use anth_compose::keys::{Distribution, Keyring};
 use anth_compose::registry::Registry;
 use anth_contract::manifest::{Manifest, ServiceClass};
-use anth_contract::{AppId, Composition, Grant, InterfaceId, Outcome, Risk, GRANT_VERSION};
+use anth_contract::{
+    AppId, Composition, Grant, InterfaceId, KeyAlgorithm, Outcome, Risk, TrustedKey, GRANT_VERSION,
+    KEY_VERSION,
+};
 use axum::body::{to_bytes, Body};
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -204,6 +208,11 @@ const SYSTEM_CLASSES: &[(&str, ServiceClass)] = &[
     ("storage", ServiceClass::Host),
     ("accounts", ServiceClass::Host),
     ("home", ServiceClass::Host),
+    ("certs", ServiceClass::Admin),
+    ("acme", ServiceClass::Socket),
+    ("proxy", ServiceClass::Socket),
+    ("containers", ServiceClass::Admin),
+    ("store", ServiceClass::Socket),
 ];
 
 fn system_class(name: &str) -> ServiceClass {
@@ -239,6 +248,7 @@ fn system_manifest(app: &str, class: &str) -> String {
         .replace("{{sha256}}", &sha)
         .replace("{{service_class}}", class)
         .replace("{{service_argv}}", r#"["--socket", "{socket}"]"#)
+        .replace("{{runtime}}", "/var/run/docker.sock")
         .replace("{{module_sha256}}", &asset)
         .replace("{{modal_sha256}}", &asset)
         .replace("{{icon_sha256}}", &asset)
@@ -294,6 +304,100 @@ fn system_state(include_net: bool) -> (Arc<EngineState>, PathBuf) {
             .with_composition(composition)
             .with_apps(&dir, 1 << 20, false, true)
             .keyless(),
+    );
+    (state, dir)
+}
+
+/// The edge composition of §21 §3, as shipped in `compositions/edge.toml`.
+fn edge_composition() -> Composition {
+    let path = repo_root().join("compositions/edge.toml");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    Composition::parse(&text).expect("edge composition")
+}
+
+/// The CI key that signs the edge fixtures. It is deterministic so a fixture
+/// tree is reproducible; nothing trusts it outside this test.
+fn edge_key() -> SigningKey {
+    SigningKey::from_bytes(&[9u8; 32])
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Installs, signs, trusts and approves every app of the edge composition, with
+/// `removed` filtered out. Signing matters: a release build verifies the
+/// manifest, and the removal matrix must not be proven on unsigned fixtures.
+fn edge_state(removed: &[&str], allow_degraded: bool) -> (Arc<EngineState>, PathBuf) {
+    let dir = scratch();
+    let apps = dir.join("apps");
+    fs::create_dir_all(&apps).expect("apps");
+    fs::set_permissions(&apps, fs::Permissions::from_mode(0o700)).expect("chmod");
+    let mut composition = edge_composition();
+    for profile in &mut composition.profile {
+        profile
+            .apps
+            .retain(|id| !removed.iter().any(|wanted| id == wanted));
+    }
+    composition.validate().expect("validate");
+
+    let signing = edge_key();
+    let trusted = TrustedKey {
+        version: KEY_VERSION,
+        algorithm: KeyAlgorithm::Ed25519,
+        public_key: hex(&signing.verifying_key().to_bytes()),
+        label: Some("edge-ci".to_string()),
+        added_by: "uid:1000".to_string(),
+        added_at: "2026-11-25T00:00:00Z".to_string(),
+    };
+    Keyring::new(&dir).add(&trusted).expect("trusted key");
+
+    let mut ids = Vec::new();
+    for profile in &composition.profile {
+        for id in &profile.apps {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+    }
+    for id in &ids {
+        let name = id.rsplit('.').next().expect("app id segment");
+        let class = system_class(name);
+        let app_dir = apps.join(id);
+        copy_tree(
+            &repo_root().join("apps").join(name).join("wit"),
+            &app_dir.join("wit"),
+        );
+        fs::write(
+            app_dir.join("manifest.toml"),
+            system_manifest(name, class.as_str()),
+        )
+        .expect("manifest");
+        let message = anth_compose::bundle::signed_message(&app_dir).expect("message");
+        fs::write(
+            app_dir.join("manifest.sig"),
+            format!(
+                "{}\n",
+                anth_compose::signature::signature_base64(&signing.sign(&message).to_bytes())
+            ),
+        )
+        .expect("signature");
+        fs::write(
+            app_dir.join("descriptor.toml"),
+            format!(
+                "version = 1\napp = \"{id}\"\nenabled = true\ntier = \"third-party\"\n\
+                 installed_at = \"2026-11-25T00:00:00Z\"\n"
+            ),
+        )
+        .expect("descriptor");
+        approve_with(&dir, id, class.risk());
+    }
+    let state = Arc::new(
+        EngineState::new(1000)
+            .with_composition(composition)
+            .allow_degraded(allow_degraded)
+            .with_apps(&dir, 1 << 20, true, true),
     );
     (state, dir)
 }
@@ -753,6 +857,136 @@ async fn removing_net_leaves_the_other_system_apps() {
     assert_eq!(view["label"], "Firewall");
     assert_eq!(view["parent"], "org.anthracite.net#anth-net");
 
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn the_edge_composition_produces_the_golden_surface() {
+    let (state, dir) = edge_state(&[], true);
+    let value = composition(state).await;
+    let path = fixtures().join("expected/edge.json");
+    if std::env::var_os("BLESS").is_some() {
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&value).expect("render")
+            ),
+        )
+        .expect("bless");
+    }
+    let expected: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("expected fixture"))
+            .expect("expected json");
+    assert_eq!(value, expected);
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn the_edge_composition_boots_with_twelve_apps() {
+    let (state, dir) = edge_state(&[], true);
+    let value = composition(state).await;
+    assert!(value["surface"]["fatal"].is_null(), "{value}");
+    assert_eq!(value["surface"]["degraded"], serde_json::json!([]));
+    let ids = value["surface"]["apps"]
+        .as_array()
+        .expect("apps")
+        .iter()
+        .map(|app| app["id"].as_str().expect("id"))
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 12, "{ids:?}");
+    for app in [
+        "org.anthracite.certs",
+        "org.anthracite.acme",
+        "org.anthracite.proxy",
+        "org.anthracite.containers",
+        "org.anthracite.store",
+    ] {
+        assert!(ids.contains(app), "`{app}` did not boot: {ids:?}");
+    }
+    cleanup(dir);
+}
+
+/// The removal matrix of §21 §5 at the resolution level: removing one app must
+/// leave the rest running and degrade exactly the consumers that imported it.
+#[tokio::test]
+async fn removing_each_edge_app_leaves_the_expected_degradation() {
+    for (removed, running, degraded) in [
+        ("org.anthracite.certs", 10, vec!["org.anthracite.acme"]),
+        ("org.anthracite.proxy", 11, vec![]),
+        ("org.anthracite.acme", 11, vec![]),
+        ("org.anthracite.containers", 11, vec![]),
+        ("org.anthracite.store", 11, vec![]),
+    ] {
+        let (state, dir) = edge_state(&[removed], true);
+        let value = composition(state).await;
+        assert!(
+            value["surface"]["fatal"].is_null(),
+            "removing `{removed}` was fatal: {value}"
+        );
+        let apps = value["surface"]["apps"].as_array().expect("apps");
+        assert_eq!(apps.len(), running, "removing `{removed}`: {apps:?}");
+        assert!(!apps.iter().any(|app| app["id"] == removed));
+        let names = value["surface"]["degraded"]
+            .as_array()
+            .expect("degraded")
+            .iter()
+            .map(|app| app["app"].as_str().expect("app"))
+            .collect::<Vec<_>>();
+        assert_eq!(names, degraded, "removing `{removed}`: {value}");
+        cleanup(dir);
+    }
+}
+
+#[tokio::test]
+async fn removing_certs_names_the_missing_interface() {
+    let (state, dir) = edge_state(&["org.anthracite.certs"], true);
+    let value = composition(state).await;
+    let acme = value["surface"]["degraded"]
+        .as_array()
+        .expect("degraded")
+        .iter()
+        .find(|app| app["app"] == "org.anthracite.acme")
+        .expect("acme degraded");
+    assert_eq!(acme["reason"], "unresolved");
+    assert_eq!(acme["detail"]["interface"], "anthracite:certs/store@1.0.0");
+    cleanup(dir);
+}
+
+/// Without the opt-in the same document is a fatal composition error, because
+/// the operator can repair it by editing the file (§8.5).
+#[tokio::test]
+async fn removing_certs_without_the_opt_in_is_fatal() {
+    let (state, dir) = edge_state(&["org.anthracite.certs"], false);
+    let value = composition(state).await;
+    assert_eq!(value["surface"]["fatal"]["code"], "invalid", "{value}");
+    let message = value["surface"]["fatal"]["message"]
+        .as_str()
+        .expect("message");
+    assert!(message.contains("org.anthracite.acme"), "{message}");
+    assert!(
+        message.contains("anthracite:certs/store@1.0.0"),
+        "{message}"
+    );
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn removing_all_five_edge_apps_leaves_the_system_composition() {
+    let (state, dir) = edge_state(
+        &[
+            "org.anthracite.certs",
+            "org.anthracite.acme",
+            "org.anthracite.proxy",
+            "org.anthracite.containers",
+            "org.anthracite.store",
+        ],
+        true,
+    );
+    let value = composition(state).await;
+    assert!(value["surface"]["fatal"].is_null(), "{value}");
+    assert_eq!(value["surface"]["degraded"], serde_json::json!([]));
+    assert_eq!(value["surface"]["apps"].as_array().expect("apps").len(), 7);
     cleanup(dir);
 }
 

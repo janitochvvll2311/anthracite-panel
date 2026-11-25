@@ -96,7 +96,7 @@ boot would lock the operator out of the tool that repairs the system.
 
 | Phase | Situation | Behaviour |
 | --- | --- | --- |
-| Resolve | an import has **no candidate** at all | **fatal**, unless `--allow-degraded` |
+| Resolve | an import has **no candidate** at all | **fatal**, unless `[composition] allow-degraded = true` |
 | Resolve | **two** apps export the same interface | **fatal** |
 | Resolve | the composition names an app that is **not installed** | **fatal** |
 | Resolve | an import's only candidate is **unapproved** or **disabled** | **blocked**, degraded |

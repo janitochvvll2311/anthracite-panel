@@ -121,7 +121,7 @@ docker run -p 8091:8091 -p 8100-8199:8100-8199 \
   -v anth-sessions:/opt/anthracite/state \
   -e ANTHRACITE_CAPTCHA_SITE_KEY -e ANTHRACITE_CAPTCHA_SECRET \
   -e ANTHRACITE_CAPTCHA_HOSTNAME -e ANTHRACITE_TRUST_PROXY=1 \
-  anthracite-demo-sessions:0.6.1
+  anthracite-demo-sessions:0.7.0
 ```
 
 The image runs as uid 1000, with the state at `/opt/anthracite/state` and

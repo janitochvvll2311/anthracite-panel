@@ -132,6 +132,15 @@ async fn boot(
     composition: &Composition,
     runtime: Arc<FakeRuntime>,
 ) -> anth_engine::boot::BootReport {
+    boot_with(dir, composition, runtime, false).await
+}
+
+async fn boot_with(
+    dir: &Path,
+    composition: &Composition,
+    runtime: Arc<FakeRuntime>,
+    allow_degraded: bool,
+) -> anth_engine::boot::BootReport {
     let supervisor = Supervisor::new(runtime);
     let services = anth_engine::service::ServiceSupervisor::new(
         dir,
@@ -143,9 +152,12 @@ async fn boot(
         &services,
         dir,
         composition,
-        false,
-        &LimitsSection::default(),
-        LogSettings::default(),
+        anth_engine::boot::BootOptions {
+            allow_degraded,
+            allow_third_party_service: false,
+            limits: &LimitsSection::default(),
+            log: LogSettings::default(),
+        },
     )
     .await
     .expect("boot")
@@ -210,6 +222,34 @@ async fn a_failed_start_degrades_its_consumers() {
         .expect("consumer")
         .contains("not running"));
     assert_eq!(runtime.instances(), 0);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn an_unresolved_import_degrades_without_taking_the_boot_down() {
+    let (dir, composition) = fixture("unresolved-import", &["org.example.consumer"]);
+    let runtime = Arc::new(FakeRuntime::new());
+    let report = boot_with(&dir, &composition, runtime, true).await;
+    assert!(report.fatal.is_none(), "{:?}", report.fatal);
+    assert!(report.started.is_empty());
+    assert_eq!(
+        report
+            .degraded
+            .get(&AppId::parse("org.example.consumer").unwrap())
+            .map(String::as_str),
+        Some("unresolved")
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn an_unresolved_import_is_fatal_without_the_opt_in() {
+    let (dir, composition) = fixture("unresolved-import", &["org.example.consumer"]);
+    let runtime = Arc::new(FakeRuntime::new());
+    let report = boot(&dir, &composition, runtime).await;
+    assert!(report.started.is_empty());
+    let fatal = report.fatal.expect("fatal resolution");
+    assert!(fatal.message().contains("example:provider/greeting@1.0.0"));
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -337,9 +377,12 @@ async fn the_switch_off_degrades_an_installed_service() {
         &services,
         &dir,
         &composition,
-        false,
-        &LimitsSection::default(),
-        LogSettings::default(),
+        anth_engine::boot::BootOptions {
+            allow_degraded: false,
+            allow_third_party_service: false,
+            limits: &LimitsSection::default(),
+            log: LogSettings::default(),
+        },
     )
     .await
     .expect("boot");
@@ -368,9 +411,12 @@ async fn a_service_only_app_starts_answers_and_stops() {
         &services,
         &dir,
         &composition,
-        true,
-        &LimitsSection::default(),
-        LogSettings::default(),
+        anth_engine::boot::BootOptions {
+            allow_degraded: false,
+            allow_third_party_service: true,
+            limits: &LimitsSection::default(),
+            log: LogSettings::default(),
+        },
     )
     .await
     .expect("boot");

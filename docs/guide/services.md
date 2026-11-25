@@ -32,6 +32,26 @@ or argv changed without a new approval.
 The class is the **declared** reach. It is shown at approval and frozen; it is
 not a sandbox by itself ([Security](security.md#services-and-the-sandbox)).
 
+### Approval text
+
+The panel shows the class, every root with its mode, every listener (enforced)
+and the egress list (intent) before the operator approves. For `admin` and
+`host` it also says that the class is declared reach, not a sandbox. A
+third-party native service additionally needs `[services] allow-third-party`
+turned on; a `system` bundle does not.
+
+The five edge apps make the wording concrete:
+
+| App | The approval must say |
+| --- | --- |
+| `certs` | it reads the declared scan roots and writes keys into `{shared}/tls`, readable by peers granted `{shared}` |
+| `acme` | its peers come from the directory allowlist; `allow-private` is an explicit opt-in |
+| `proxy` | it owns the declared listeners and egress; the document cannot invent a bind |
+| `containers` | the runtime socket is root-equivalent for containers |
+| `store` | it downloads and caches; it never installs or approves |
+
+See [Ports, roots and capabilities](ports.md) for the exact manifest grammar.
+
 ## Placeholders
 
 `argv` may name three directories, and the engine substitutes absolute paths:

@@ -53,3 +53,9 @@ memory-pages = 256
 # How long a native service has to answer `GET /health` before it is degraded.
 start-timeout-ms = 5_000
 wall-ms = 5_000
+
+[composition]
+# Off by default: an import with no provider is a fatal composition error. Turn
+# it on to remove one of the five edge apps while a consumer stays composed: the
+# consumer degrades with `unresolved` and the rest of the system boots (§8.5).
+allow-degraded = false

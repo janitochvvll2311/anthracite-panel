@@ -75,14 +75,21 @@ out=${out:-$release/separate}
 rm -rf "$out"
 mkdir -p "$out"
 
-apps="accounts firewall fs home net proc storage terminal"
+apps=""
+for bundle in "$release/bundles"/*.anth; do
+    app=$(basename "$bundle" .anth)
+    # Hello is the developer example, not part of the system set.
+    [ "$app" = hello ] && continue
+    apps="$apps $app"
+done
+[ -n "$apps" ] || { echo "no bundles in $release/bundles" >&2; exit 1; }
 for app in $apps; do
-    for half in system:$release/bundles demo:$release/demo; do
-        kind=${half%%:*}
-        source=${half#*:}/$app.anth
-        [ -f "$source" ] || { echo "missing $source" >&2; exit 1; }
-        cp "$source" "$out/$kind-org.anthracite.$app.anth"
-    done
+    source=$release/bundles/$app.anth
+    [ -f "$source" ] || { echo "missing $source" >&2; exit 1; }
+    cp "$source" "$out/system-org.anthracite.$app.anth"
+    if [ -f "$release/demo/$app.anth" ]; then
+        cp "$release/demo/$app.anth" "$out/demo-org.anthracite.$app.anth"
+    fi
 done
 
 for bundle in "$out"/*.anth; do
@@ -98,9 +105,13 @@ done
 (
     cd "$out"
     sha256sum ./*.anth > SHA256SUMS
-    tar -czf "anthracite-$version-bundles.tar.gz" \
-        ./system-*.anth ./demo-*.anth SHA256SUMS
+    set -- ./system-*.anth ./SHA256SUMS
+    if [ -e ./demo-org.anthracite.accounts.anth ]; then
+        set -- "$@" ./demo-*.anth
+    fi
+    tar -czf "anthracite-$version-bundles.tar.gz" "$@"
 )
 
-echo "bundles: wrote $out ($version, 16 apps, key $(printf '%s' "$public" | cut -c1-12)…)"
+count=$(ls "$out"/*.anth | wc -l | tr -d ' ')
+echo "bundles: wrote $out ($version, $count bundles, key $(printf '%s' "$public" | cut -c1-12)…)"
 echo "bundles: $out/anthracite-$version-bundles.tar.gz"

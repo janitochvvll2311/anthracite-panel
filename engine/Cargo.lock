@@ -32,6 +32,7 @@ dependencies = [
  "anth-contract",
  "axum",
  "base64",
+ "ed25519-dalek",
  "form_urlencoded",
  "futures-core",
  "futures-util",

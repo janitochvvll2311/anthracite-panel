@@ -13,7 +13,7 @@ root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 invoked=$(pwd)
 cd "$root"
 
-apps_all="hello accounts firewall fs home net proc storage terminal"
+apps_all="hello accounts firewall fs home net proc storage terminal certs acme proxy containers store"
 key=
 out=
 apps=$apps_all

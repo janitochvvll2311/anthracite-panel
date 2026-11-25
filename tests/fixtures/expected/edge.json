@@ -1,0 +1,1650 @@
+{
+  "composition": {
+    "profile": [
+      {
+        "apps": [
+          "org.anthracite.fs",
+          "org.anthracite.terminal",
+          "org.anthracite.proc",
+          "org.anthracite.net",
+          "org.anthracite.storage",
+          "org.anthracite.accounts",
+          "org.anthracite.firewall",
+          "org.anthracite.certs",
+          "org.anthracite.acme",
+          "org.anthracite.proxy",
+          "org.anthracite.containers",
+          "org.anthracite.store"
+        ],
+        "id": "edge"
+      }
+    ],
+    "version": 1
+  },
+  "surface": {
+    "apps": [
+      {
+        "cli": [
+          {
+            "function": "list",
+            "interface": "anthracite:fs/read@1.2.0",
+            "verb": "files"
+          },
+          {
+            "function": "stat",
+            "interface": "anthracite:fs/read@1.2.0",
+            "verb": "file-stat"
+          },
+          {
+            "function": "read-file",
+            "interface": "anthracite:fs/read@1.2.0",
+            "verb": "file-read"
+          },
+          {
+            "function": "trash",
+            "interface": "anthracite:fs/read@1.2.0",
+            "verb": "trash"
+          },
+          {
+            "function": "rename",
+            "interface": "anthracite:fs/write@1.2.0",
+            "verb": "rename"
+          },
+          {
+            "function": "restore",
+            "interface": "anthracite:fs/write@1.2.0",
+            "verb": "restore"
+          }
+        ],
+        "exports": [
+          "anthracite:fs/read@1.2.0",
+          "anthracite:fs/write@1.2.0"
+        ],
+        "icon": "folder",
+        "id": "org.anthracite.fs",
+        "risk": "host",
+        "routes": [
+          {
+            "function": "list",
+            "interface": "anthracite:fs/read@1.2.0",
+            "method": "GET",
+            "path": "/files"
+          },
+          {
+            "function": "stat",
+            "interface": "anthracite:fs/read@1.2.0",
+            "method": "GET",
+            "path": "/stat"
+          },
+          {
+            "function": "read-file",
+            "interface": "anthracite:fs/read@1.2.0",
+            "method": "GET",
+            "path": "/file"
+          },
+          {
+            "function": "read-link",
+            "interface": "anthracite:fs/read@1.2.0",
+            "method": "GET",
+            "path": "/target"
+          },
+          {
+            "function": "write-file",
+            "interface": "anthracite:fs/write@1.2.0",
+            "method": "PUT",
+            "path": "/file"
+          },
+          {
+            "function": "mkdir",
+            "interface": "anthracite:fs/write@1.2.0",
+            "method": "POST",
+            "path": "/dir"
+          },
+          {
+            "function": "symlink",
+            "interface": "anthracite:fs/write@1.2.0",
+            "method": "POST",
+            "path": "/symlink"
+          },
+          {
+            "function": "remove",
+            "interface": "anthracite:fs/write@1.2.0",
+            "method": "DELETE",
+            "path": "/entry"
+          },
+          {
+            "function": "trash",
+            "interface": "anthracite:fs/read@1.2.0",
+            "method": "GET",
+            "path": "/trash"
+          },
+          {
+            "function": "rename",
+            "interface": "anthracite:fs/write@1.2.0",
+            "method": "POST",
+            "path": "/rename"
+          },
+          {
+            "function": "restore",
+            "interface": "anthracite:fs/write@1.2.0",
+            "method": "POST",
+            "path": "/restore"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "folder",
+            "id": "panel.view",
+            "label": "Files",
+            "module": "web/fs.js",
+            "order": 10,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-fs"
+          },
+          {
+            "actions": [
+              {
+                "action": "new",
+                "icon": "plus",
+                "label": "New",
+                "tag": "new"
+              },
+              {
+                "action": "upload",
+                "files": true,
+                "icon": "plus",
+                "label": "Upload",
+                "tag": "upload"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Add",
+            "module": "",
+            "order": 30,
+            "sha256": "",
+            "tag": "fs-add",
+            "view": "anth-fs"
+          },
+          {
+            "id": "panel.modal",
+            "label": "New entry",
+            "module": "web/fs-modal.js",
+            "order": 31,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "fs-new-modal"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Rename",
+            "module": "web/fs-modal.js",
+            "order": 32,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "fs-rename-modal"
+          },
+          {
+            "hidden": true,
+            "icon": "pen",
+            "id": "panel.view",
+            "label": "Editor",
+            "module": "web/fs.js",
+            "order": 11,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-fs-editor"
+          }
+        ],
+        "version": "0.5.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "list",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "verb": "sessions"
+          },
+          {
+            "function": "open",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "verb": "session-open"
+          },
+          {
+            "function": "read",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "verb": "session-read"
+          },
+          {
+            "function": "close",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "verb": "session-close"
+          }
+        ],
+        "exports": [
+          "anthracite:terminal/terminal@1.0.0",
+          "anthracite:terminal/subscription@1.0.0"
+        ],
+        "icon": "terminal",
+        "id": "org.anthracite.terminal",
+        "risk": "host",
+        "routes": [
+          {
+            "function": "open",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "method": "POST",
+            "path": "/open"
+          },
+          {
+            "function": "list",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "method": "GET",
+            "path": "/sessions"
+          },
+          {
+            "function": "read",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "method": "GET",
+            "path": "/read"
+          },
+          {
+            "function": "follow",
+            "interface": "anthracite:terminal/subscription@1.0.0",
+            "method": "GET",
+            "path": "/stream"
+          },
+          {
+            "function": "follow",
+            "interface": "anthracite:terminal/subscription@1.0.0",
+            "method": "GET",
+            "path": "/socket"
+          },
+          {
+            "function": "write",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "method": "POST",
+            "path": "/write"
+          },
+          {
+            "function": "resize",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "method": "POST",
+            "path": "/resize"
+          },
+          {
+            "function": "signal",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "method": "POST",
+            "path": "/signal"
+          },
+          {
+            "function": "close",
+            "interface": "anthracite:terminal/terminal@1.0.0",
+            "method": "DELETE",
+            "path": "/session"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "terminal",
+            "id": "panel.view",
+            "label": "Terminal",
+            "module": "web/terminal.js",
+            "order": 11,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-terminal"
+          }
+        ],
+        "version": "0.1.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "list",
+            "interface": "anthracite:proc/proc@1.1.0",
+            "verb": "processes"
+          },
+          {
+            "function": "signal",
+            "interface": "anthracite:proc/proc@1.1.0",
+            "verb": "process-signal"
+          },
+          {
+            "function": "spawn",
+            "interface": "anthracite:proc/proc@1.1.0",
+            "verb": "process-spawn"
+          }
+        ],
+        "exports": [
+          "anthracite:proc/proc@1.1.0"
+        ],
+        "icon": "activity",
+        "id": "org.anthracite.proc",
+        "risk": "admin",
+        "routes": [
+          {
+            "function": "list",
+            "interface": "anthracite:proc/proc@1.1.0",
+            "method": "GET",
+            "path": "/processes"
+          },
+          {
+            "function": "signal",
+            "interface": "anthracite:proc/proc@1.1.0",
+            "method": "POST",
+            "path": "/signal"
+          },
+          {
+            "function": "spawn",
+            "interface": "anthracite:proc/proc@1.1.0",
+            "method": "POST",
+            "path": "/spawn"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "activity",
+            "id": "panel.view",
+            "label": "Processes",
+            "module": "web/proc.js",
+            "order": 20,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-proc"
+          },
+          {
+            "actions": [
+              {
+                "icon": "plus",
+                "label": "Spawn",
+                "tag": "spawn",
+                "target": "proc-spawn-modal"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Spawn",
+            "module": "",
+            "order": 30,
+            "sha256": "",
+            "tag": "proc-spawn",
+            "view": "anth-proc"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Spawn process",
+            "module": "web/proc-modal.js",
+            "order": 31,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "proc-spawn-modal"
+          }
+        ],
+        "version": "0.6.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "interfaces",
+            "interface": "anthracite:net/net@1.2.0",
+            "verb": "interfaces"
+          },
+          {
+            "function": "routes",
+            "interface": "anthracite:net/net@1.2.0",
+            "verb": "routes"
+          },
+          {
+            "function": "set-up",
+            "interface": "anthracite:net/net@1.2.0",
+            "verb": "interface-up"
+          },
+          {
+            "function": "add-route",
+            "interface": "anthracite:net/net@1.2.0",
+            "verb": "route-add"
+          },
+          {
+            "function": "remove-route",
+            "interface": "anthracite:net/net@1.2.0",
+            "verb": "route-remove"
+          }
+        ],
+        "exports": [
+          "anthracite:net/net@1.2.0"
+        ],
+        "icon": "network",
+        "id": "org.anthracite.net",
+        "risk": "host",
+        "routes": [
+          {
+            "function": "interfaces",
+            "interface": "anthracite:net/net@1.2.0",
+            "method": "GET",
+            "path": "/interfaces"
+          },
+          {
+            "function": "routes",
+            "interface": "anthracite:net/net@1.2.0",
+            "method": "GET",
+            "path": "/routes"
+          },
+          {
+            "function": "watch",
+            "interface": "anthracite:net/net@1.2.0",
+            "method": "GET",
+            "path": "/watch"
+          },
+          {
+            "function": "set-up",
+            "interface": "anthracite:net/net@1.2.0",
+            "method": "POST",
+            "path": "/up"
+          },
+          {
+            "function": "add-route",
+            "interface": "anthracite:net/net@1.2.0",
+            "method": "POST",
+            "path": "/route"
+          },
+          {
+            "function": "remove-route",
+            "interface": "anthracite:net/net@1.2.0",
+            "method": "DELETE",
+            "path": "/route"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "network",
+            "id": "panel.view",
+            "label": "Network",
+            "module": "web/net.js",
+            "order": 21,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tab": "Interfaces",
+            "tag": "anth-net"
+          },
+          {
+            "actions": [
+              {
+                "icon": "plus",
+                "label": "Add route",
+                "tag": "add-route",
+                "target": "net-route-modal"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Add route",
+            "module": "",
+            "order": 30,
+            "sha256": "",
+            "tag": "net-route",
+            "view": "anth-net"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Add route",
+            "module": "web/net-modal.js",
+            "order": 31,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "net-route-modal"
+          }
+        ],
+        "version": "0.6.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "devices",
+            "interface": "anthracite:storage/storage@1.2.0",
+            "verb": "devices"
+          },
+          {
+            "function": "mounts",
+            "interface": "anthracite:storage/storage@1.2.0",
+            "verb": "mounts"
+          },
+          {
+            "function": "attach",
+            "interface": "anthracite:storage/storage@1.2.0",
+            "verb": "mount"
+          },
+          {
+            "function": "detach",
+            "interface": "anthracite:storage/storage@1.2.0",
+            "verb": "unmount"
+          }
+        ],
+        "exports": [
+          "anthracite:storage/storage@1.2.0"
+        ],
+        "icon": "disk",
+        "id": "org.anthracite.storage",
+        "risk": "host",
+        "routes": [
+          {
+            "function": "devices",
+            "interface": "anthracite:storage/storage@1.2.0",
+            "method": "GET",
+            "path": "/devices"
+          },
+          {
+            "function": "mounts",
+            "interface": "anthracite:storage/storage@1.2.0",
+            "method": "GET",
+            "path": "/mounts"
+          },
+          {
+            "function": "attach",
+            "interface": "anthracite:storage/storage@1.2.0",
+            "method": "POST",
+            "path": "/mount"
+          },
+          {
+            "function": "detach",
+            "interface": "anthracite:storage/storage@1.2.0",
+            "method": "POST",
+            "path": "/unmount"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "disk",
+            "id": "panel.view",
+            "label": "Storage",
+            "module": "web/storage.js",
+            "order": 22,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-storage"
+          },
+          {
+            "actions": [
+              {
+                "icon": "plus",
+                "label": "Mount",
+                "tag": "mount",
+                "target": "storage-mount-modal"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Mount",
+            "module": "",
+            "order": 30,
+            "sha256": "",
+            "tag": "storage-mount",
+            "view": "anth-storage"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Mount device",
+            "module": "web/storage-modal.js",
+            "order": 31,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "storage-mount-modal"
+          }
+        ],
+        "version": "0.6.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "users",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "verb": "users"
+          },
+          {
+            "function": "groups",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "verb": "groups"
+          },
+          {
+            "function": "create-user",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "verb": "user-create"
+          },
+          {
+            "function": "delete-user",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "verb": "user-delete"
+          },
+          {
+            "function": "set-lock",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "verb": "user-lock"
+          },
+          {
+            "function": "policy",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "verb": "policy"
+          },
+          {
+            "function": "create-group",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "verb": "group-create"
+          },
+          {
+            "function": "delete-group",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "verb": "group-delete"
+          }
+        ],
+        "exports": [
+          "anthracite:accounts/accounts@1.2.0"
+        ],
+        "icon": "users",
+        "id": "org.anthracite.accounts",
+        "risk": "host",
+        "routes": [
+          {
+            "function": "users",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "GET",
+            "path": "/users"
+          },
+          {
+            "function": "groups",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "GET",
+            "path": "/groups"
+          },
+          {
+            "function": "create-user",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "POST",
+            "path": "/user"
+          },
+          {
+            "function": "delete-user",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "DELETE",
+            "path": "/user"
+          },
+          {
+            "function": "set-lock",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "POST",
+            "path": "/lock"
+          },
+          {
+            "function": "policy",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "GET",
+            "path": "/policy"
+          },
+          {
+            "function": "set-password",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "POST",
+            "path": "/password"
+          },
+          {
+            "function": "create-group",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "POST",
+            "path": "/group"
+          },
+          {
+            "function": "delete-group",
+            "interface": "anthracite:accounts/accounts@1.2.0",
+            "method": "DELETE",
+            "path": "/group"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "users",
+            "id": "panel.view",
+            "label": "Accounts",
+            "module": "web/accounts.js",
+            "order": 23,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-accounts"
+          },
+          {
+            "actions": [
+              {
+                "action": "new-user",
+                "icon": "plus",
+                "label": "Create user",
+                "tag": "new-user"
+              },
+              {
+                "action": "new-group",
+                "icon": "plus",
+                "label": "Create group",
+                "tag": "new-group"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Add",
+            "module": "",
+            "order": 30,
+            "sha256": "",
+            "tag": "accounts-add",
+            "view": "anth-accounts"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Create user",
+            "module": "web/accounts-modal.js",
+            "order": 31,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "accounts-user-modal"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Create group",
+            "module": "web/accounts-modal.js",
+            "order": 32,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "accounts-group-modal"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Set password",
+            "module": "web/accounts-modal.js",
+            "order": 33,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "accounts-password-modal"
+          }
+        ],
+        "version": "0.6.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "snapshot",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "verb": "status"
+          },
+          {
+            "function": "add-rule",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "verb": "rule-add"
+          },
+          {
+            "function": "update-rule",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "verb": "rule-update"
+          },
+          {
+            "function": "delete-rule",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "verb": "rule-delete"
+          },
+          {
+            "function": "flush",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "verb": "flush"
+          },
+          {
+            "function": "set-policy",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "verb": "policy"
+          }
+        ],
+        "exports": [
+          "anthracite:firewall/firewall@1.0.0"
+        ],
+        "icon": "shield",
+        "id": "org.anthracite.firewall",
+        "risk": "host",
+        "routes": [
+          {
+            "function": "snapshot",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "method": "GET",
+            "path": "/snapshot"
+          },
+          {
+            "function": "add-rule",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "method": "POST",
+            "path": "/rule"
+          },
+          {
+            "function": "update-rule",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "method": "POST",
+            "path": "/update"
+          },
+          {
+            "function": "delete-rule",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "method": "DELETE",
+            "path": "/rule"
+          },
+          {
+            "function": "flush",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "method": "POST",
+            "path": "/flush"
+          },
+          {
+            "function": "set-policy",
+            "interface": "anthracite:firewall/firewall@1.0.0",
+            "method": "POST",
+            "path": "/policy"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "shield",
+            "id": "panel.view",
+            "label": "Firewall",
+            "module": "web/firewall.js",
+            "order": 22,
+            "parent": "org.anthracite.net#anth-net",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-firewall"
+          },
+          {
+            "actions": [
+              {
+                "icon": "plus",
+                "label": "Add rule",
+                "tag": "add-rule",
+                "target": "firewall-rule-modal"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Add rule",
+            "module": "",
+            "order": 30,
+            "sha256": "",
+            "tag": "firewall-rule",
+            "view": "anth-firewall"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Firewall rule",
+            "module": "web/firewall-modal.js",
+            "order": 31,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "firewall-rule-modal"
+          }
+        ],
+        "version": "0.6.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "inventory",
+            "interface": "anthracite:certs/store@1.0.0",
+            "verb": "list"
+          },
+          {
+            "function": "get-certificate",
+            "interface": "anthracite:certs/store@1.0.0",
+            "verb": "show"
+          },
+          {
+            "function": "import-certificate",
+            "interface": "anthracite:certs/store@1.0.0",
+            "verb": "import"
+          },
+          {
+            "function": "validate",
+            "interface": "anthracite:certs/store@1.0.0",
+            "verb": "validate"
+          }
+        ],
+        "exports": [
+          "anthracite:certs/store@1.0.0"
+        ],
+        "icon": "shield",
+        "id": "org.anthracite.certs",
+        "risk": "admin",
+        "routes": [
+          {
+            "function": "inventory",
+            "interface": "anthracite:certs/store@1.0.0",
+            "method": "GET",
+            "path": "/certs"
+          },
+          {
+            "function": "get-certificate",
+            "interface": "anthracite:certs/store@1.0.0",
+            "method": "GET",
+            "path": "/certificate"
+          },
+          {
+            "function": "import-certificate",
+            "interface": "anthracite:certs/store@1.0.0",
+            "method": "POST",
+            "path": "/certs"
+          },
+          {
+            "function": "remove-certificate",
+            "interface": "anthracite:certs/store@1.0.0",
+            "method": "DELETE",
+            "path": "/certificate"
+          },
+          {
+            "function": "validate",
+            "interface": "anthracite:certs/store@1.0.0",
+            "method": "POST",
+            "path": "/certificate/validate"
+          },
+          {
+            "function": "publish",
+            "interface": "anthracite:certs/store@1.0.0",
+            "method": "POST",
+            "path": "/certificate/publish"
+          },
+          {
+            "function": "set-auto-renew",
+            "interface": "anthracite:certs/store@1.0.0",
+            "method": "POST",
+            "path": "/certificate/auto-renew"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "shield",
+            "id": "panel.view",
+            "label": "Certificates",
+            "module": "web/certs.js",
+            "order": 23,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-certs"
+          },
+          {
+            "actions": [
+              {
+                "icon": "upload",
+                "label": "Import certificate",
+                "tag": "import",
+                "target": "certs-import-modal"
+              },
+              {
+                "action": "refresh",
+                "icon": "refresh",
+                "label": "Refresh",
+                "tag": "refresh"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Certificates",
+            "module": "",
+            "order": 23,
+            "sha256": "",
+            "tag": "certs-fab",
+            "view": "anth-certs"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Import certificate",
+            "module": "web/certs-modal.js",
+            "order": 32,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "certs-import-modal"
+          }
+        ],
+        "version": "0.7.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "list-accounts",
+            "interface": "anthracite:acme/client@1.0.0",
+            "verb": "accounts"
+          },
+          {
+            "function": "create-account",
+            "interface": "anthracite:acme/client@1.0.0",
+            "verb": "account"
+          },
+          {
+            "function": "issue",
+            "interface": "anthracite:acme/client@1.0.0",
+            "verb": "issue"
+          },
+          {
+            "function": "list-orders",
+            "interface": "anthracite:acme/client@1.0.0",
+            "verb": "orders"
+          },
+          {
+            "function": "renew",
+            "interface": "anthracite:acme/client@1.0.0",
+            "verb": "renew"
+          },
+          {
+            "function": "revoke",
+            "interface": "anthracite:acme/client@1.0.0",
+            "verb": "revoke"
+          },
+          {
+            "function": "confirm-challenge",
+            "interface": "anthracite:acme/client@1.0.0",
+            "verb": "confirm"
+          }
+        ],
+        "exports": [
+          "anthracite:acme/client@1.0.0"
+        ],
+        "icon": "lock",
+        "id": "org.anthracite.acme",
+        "risk": "admin",
+        "routes": [
+          {
+            "function": "list-accounts",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "GET",
+            "path": "/accounts"
+          },
+          {
+            "function": "create-account",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "POST",
+            "path": "/accounts"
+          },
+          {
+            "function": "list-orders",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "GET",
+            "path": "/orders"
+          },
+          {
+            "function": "issue",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "POST",
+            "path": "/orders"
+          },
+          {
+            "function": "capabilities",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "GET",
+            "path": "/capabilities"
+          },
+          {
+            "function": "follow",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "GET",
+            "path": "/order/events"
+          },
+          {
+            "function": "confirm-challenge",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "POST",
+            "path": "/order/confirm"
+          },
+          {
+            "function": "renew",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "POST",
+            "path": "/order/renew"
+          },
+          {
+            "function": "revoke",
+            "interface": "anthracite:acme/client@1.0.0",
+            "method": "POST",
+            "path": "/order/revoke"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "lock",
+            "id": "panel.view",
+            "label": "ACME",
+            "module": "web/acme.js",
+            "order": 24,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-acme"
+          },
+          {
+            "actions": [
+              {
+                "icon": "plus",
+                "label": "Issue certificate",
+                "tag": "issue",
+                "target": "acme-issue-modal"
+              },
+              {
+                "action": "refresh",
+                "icon": "refresh",
+                "label": "Refresh",
+                "tag": "refresh"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "ACME",
+            "module": "",
+            "order": 24,
+            "sha256": "",
+            "tag": "acme-fab",
+            "view": "anth-acme"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Issue certificate",
+            "module": "web/acme-modal.js",
+            "order": 40,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "acme-issue-modal"
+          }
+        ],
+        "version": "0.7.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "status",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "verb": "status"
+          },
+          {
+            "function": "hosts",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "verb": "hosts"
+          },
+          {
+            "function": "routes",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "verb": "routes"
+          },
+          {
+            "function": "reload-certificates",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "verb": "reload"
+          }
+        ],
+        "exports": [
+          "anthracite:proxy/admin@1.0.0"
+        ],
+        "icon": "network",
+        "id": "org.anthracite.proxy",
+        "risk": "admin",
+        "routes": [
+          {
+            "function": "snapshot",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "GET",
+            "path": "/config"
+          },
+          {
+            "function": "apply",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "PUT",
+            "path": "/config"
+          },
+          {
+            "function": "status",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "GET",
+            "path": "/status"
+          },
+          {
+            "function": "logs",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "GET",
+            "path": "/logs"
+          },
+          {
+            "function": "certificates",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "GET",
+            "path": "/certificates"
+          },
+          {
+            "function": "reload-certificates",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "POST",
+            "path": "/certificates/reload"
+          },
+          {
+            "function": "hosts",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "GET",
+            "path": "/hosts"
+          },
+          {
+            "function": "routes",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "GET",
+            "path": "/routes"
+          },
+          {
+            "function": "test-upstream",
+            "interface": "anthracite:proxy/admin@1.0.0",
+            "method": "POST",
+            "path": "/upstreams/test"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "network",
+            "id": "panel.view",
+            "label": "Proxy",
+            "module": "web/proxy.js",
+            "order": 24,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-proxy"
+          },
+          {
+            "actions": [
+              {
+                "icon": "plus",
+                "label": "Add host",
+                "tag": "add-host",
+                "target": "proxy-host-modal"
+              },
+              {
+                "icon": "link",
+                "label": "Add upstream",
+                "tag": "add-upstream",
+                "target": "proxy-upstream-modal"
+              },
+              {
+                "action": "apply",
+                "icon": "refresh",
+                "label": "Apply draft",
+                "tag": "apply"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Proxy",
+            "module": "",
+            "order": 24,
+            "sha256": "",
+            "tag": "proxy-fab",
+            "view": "anth-proxy"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Host",
+            "module": "web/proxy-modal.js",
+            "order": 33,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "proxy-host-modal"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Upstream",
+            "module": "web/proxy-modal.js",
+            "order": 34,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "proxy-upstream-modal"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Route",
+            "module": "web/proxy-modal.js",
+            "order": 35,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "proxy-route-modal"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Listener",
+            "module": "web/proxy-modal.js",
+            "order": 36,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "proxy-listener-modal"
+          }
+        ],
+        "version": "0.7.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "list-containers",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "verb": "list"
+          },
+          {
+            "function": "inspect",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "verb": "inspect"
+          },
+          {
+            "function": "start",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "verb": "start"
+          },
+          {
+            "function": "stop",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "verb": "stop"
+          },
+          {
+            "function": "list-images",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "verb": "images"
+          }
+        ],
+        "exports": [
+          "anthracite:containers/runtime@1.0.0"
+        ],
+        "icon": "box",
+        "id": "org.anthracite.containers",
+        "risk": "admin",
+        "routes": [
+          {
+            "function": "list-containers",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/containers"
+          },
+          {
+            "function": "inspect",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/container"
+          },
+          {
+            "function": "create",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/containers"
+          },
+          {
+            "function": "start",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/start"
+          },
+          {
+            "function": "stop",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/stop"
+          },
+          {
+            "function": "restart",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/restart"
+          },
+          {
+            "function": "pause",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/pause"
+          },
+          {
+            "function": "unpause",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/unpause"
+          },
+          {
+            "function": "kill",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/kill"
+          },
+          {
+            "function": "remove",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/remove"
+          },
+          {
+            "function": "logs",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/container/logs"
+          },
+          {
+            "function": "stats",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/container/stats"
+          },
+          {
+            "function": "exec",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/exec"
+          },
+          {
+            "function": "exec-attach",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/container/exec/attach"
+          },
+          {
+            "function": "exec-write",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/exec-write"
+          },
+          {
+            "function": "exec-resize",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/exec-resize"
+          },
+          {
+            "function": "exec-close",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/container/exec-close"
+          },
+          {
+            "function": "list-images",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/images"
+          },
+          {
+            "function": "pull",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/images/pull"
+          },
+          {
+            "function": "remove-image",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/images/remove"
+          },
+          {
+            "function": "list-volumes",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/volumes"
+          },
+          {
+            "function": "create-volume",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/volumes/create"
+          },
+          {
+            "function": "remove-volume",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "POST",
+            "path": "/volumes/remove"
+          },
+          {
+            "function": "list-networks",
+            "interface": "anthracite:containers/runtime@1.0.0",
+            "method": "GET",
+            "path": "/networks"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "box",
+            "id": "panel.view",
+            "label": "Containers",
+            "module": "web/containers.js",
+            "order": 25,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-containers"
+          },
+          {
+            "actions": [
+              {
+                "icon": "plus",
+                "label": "Create container",
+                "tag": "create",
+                "target": "containers-create-modal"
+              },
+              {
+                "action": "refresh",
+                "icon": "refresh",
+                "label": "Refresh",
+                "tag": "refresh"
+              }
+            ],
+            "icon": "plus",
+            "id": "panel.fab",
+            "label": "Containers",
+            "module": "",
+            "order": 25,
+            "sha256": "",
+            "tag": "containers-fab",
+            "view": "anth-containers"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Create container",
+            "module": "web/containers-modal.js",
+            "order": 41,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "containers-create-modal"
+          }
+        ],
+        "version": "0.7.0"
+      },
+      {
+        "cli": [
+          {
+            "function": "sources",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "verb": "sources"
+          },
+          {
+            "function": "search",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "verb": "search"
+          },
+          {
+            "function": "app",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "verb": "show"
+          },
+          {
+            "function": "versions",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "verb": "versions"
+          },
+          {
+            "function": "check-updates",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "verb": "updates"
+          }
+        ],
+        "exports": [
+          "anthracite:store/catalog@1.0.0"
+        ],
+        "icon": "store",
+        "id": "org.anthracite.store",
+        "risk": "admin",
+        "routes": [
+          {
+            "function": "sources",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "method": "GET",
+            "path": "/sources"
+          },
+          {
+            "function": "refresh",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "method": "POST",
+            "path": "/sources/refresh"
+          },
+          {
+            "function": "search",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "method": "GET",
+            "path": "/search"
+          },
+          {
+            "function": "app",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "method": "GET",
+            "path": "/app"
+          },
+          {
+            "function": "versions",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "method": "GET",
+            "path": "/versions"
+          },
+          {
+            "function": "download",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "method": "GET",
+            "path": "/download"
+          },
+          {
+            "function": "check-updates",
+            "interface": "anthracite:store/catalog@1.0.0",
+            "method": "POST",
+            "path": "/updates"
+          }
+        ],
+        "slots": [
+          {
+            "icon": "store",
+            "id": "panel.view",
+            "label": "Store",
+            "module": "web/store.js",
+            "order": 26,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "anth-store"
+          },
+          {
+            "actions": [
+              {
+                "action": "refresh",
+                "icon": "refresh",
+                "label": "Refresh catalogues",
+                "tag": "refresh"
+              },
+              {
+                "icon": "globe",
+                "label": "Sources",
+                "tag": "sources",
+                "target": "store-sources-modal"
+              }
+            ],
+            "icon": "refresh",
+            "id": "panel.fab",
+            "label": "Store",
+            "module": "",
+            "order": 26,
+            "sha256": "",
+            "tag": "store-fab",
+            "view": "anth-store"
+          },
+          {
+            "id": "panel.modal",
+            "label": "Store sources",
+            "module": "web/store-modal.js",
+            "order": 42,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tag": "store-sources-modal"
+          }
+        ],
+        "version": "0.7.0"
+      }
+    ],
+    "degraded": [],
+    "links": [
+      {
+        "consumer": "org.anthracite.acme",
+        "interface": "anthracite:certs/store@1.0.0",
+        "provider": "org.anthracite.certs"
+      }
+    ]
+  }
+}

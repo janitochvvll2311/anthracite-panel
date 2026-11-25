@@ -75,9 +75,9 @@ for that restart.
 4. Check `anth status` and `anth audit --limit 20`; a signed build refuses a
    system bundle it did not sign, so a key rotation is a release, not a patch.
 
-State written by 0.6.x is read by later 0.6.x binaries; a downgrade is not
-supported if a newer binary wrote a format the older one does not know. Keep the
-backup from step 1 until the new version is verified.
+State written by 0.6.x is read by 0.7.0; a downgrade is not supported if a newer
+binary wrote a format the older one does not know. Keep the backup from step 1
+until the new version is verified.
 
 ## Resource limits
 
