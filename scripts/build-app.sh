@@ -53,5 +53,7 @@ mkdir -p "$(dirname "$app/$wasm_path")"
 "$wasm_tools" component new "$tmp/embedded.wasm" -o "$app/$wasm_path"
 
 sha=$(sha256sum "$app/$wasm_path" | cut -d' ' -f1)
+# Keep the manifest honest: the engine refuses a hash that does not match.
+sed -i "/^\[wasm\]/,/^\[/ s/^sha256 = \".*\"$/sha256 = \"$sha\"/" "$manifest"
 echo "built $app/$wasm_path"
 echo "manifest sha256 = \"$sha\""

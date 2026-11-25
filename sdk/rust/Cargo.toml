@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["cli", "client", "conformance", "guest", "panel", "service", "signer"]
+members = ["cli", "client", "conformance", "guest", "panel", "service", "signer", "cargo-anth"]
 
 [workspace.package]
 version = "0.8.0"

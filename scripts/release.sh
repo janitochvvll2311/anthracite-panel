@@ -75,7 +75,7 @@ echo "release: key $fingerprint"
 
 echo "release: building the binaries with the key compiled in"
 ANTHRACITE_DISTRIBUTION_KEY=$public \
-    cargo build --manifest-path sdk/rust/Cargo.toml --release -p anth-cli -p anth-conformance
+    cargo build --manifest-path sdk/rust/Cargo.toml --release -p anth-cli -p cargo-anth -p anth-conformance
 ANTHRACITE_DISTRIBUTION_KEY=$public \
     cargo build --manifest-path engine/Cargo.toml --release -p anth-engine
 ANTHRACITE_DISTRIBUTION_KEY=$public \
@@ -112,7 +112,7 @@ release_version=$(./target/release/anth --version | awk '{print $2}')
 echo "release: staging the binaries ($release_version)"
 mkdir -p "$out/bin"
 binary_rows=
-for binary in anth anth-engine anth-panel; do
+for binary in anth anth-engine anth-panel anth-sign anth-conformance cargo-anth; do
     cp "target/release/$binary" "$out/bin/$binary"
     sha=$(sha256sum "$out/bin/$binary" | cut -d' ' -f1)
     binary_rows="$binary_rows$binary	$sha

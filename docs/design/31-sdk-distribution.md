@@ -46,6 +46,16 @@ The workspace packages are still named `@anthracite/panel` and
 `@anth-panel/panel` and `@anth-panel/client`; the rename happens in the npm phase,
 before the first publish.
 
+The scoped names are the canonical ones. Do not publish unscoped `anth-*`
+packages at launch: `anth-*` is a textual prefix, not a namespace, so anyone
+could impersonate the family. If demand appears later, an unscoped alias is a
+thin re-export of the scoped package and is documented as an alias; the scoped
+package stays canonical.
+
+crates.io has no scopes and does not reserve prefixes. The `anth-*` crates are
+claimed one by one and owned by `anth-panel`; the convention is documented, not
+enforced by the registry.
+
 ### What stays internal
 
 `anth-api`, `anth-engine`, `anth-runtime`, `anth-compose`, the full

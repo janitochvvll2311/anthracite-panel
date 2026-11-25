@@ -225,6 +225,26 @@ the service class when there is one. A bundle that lies — a wrong hash, a
 declared export the component does not implement, a signature that does not
 verify — fails loudly. The same kit is what the release and CI run.
 
+## A standalone project
+
+The `v0.8.0` CLI creates a project outside this repository:
+
+```sh
+cargo install cargo-anth
+cargo anth app new org.example.notes --lang rust
+cd notes
+cargo anth app build
+cargo anth app check
+cargo anth app package --key dev.key
+cargo anth app verify --public-key <hex-public-key>
+```
+
+`--lang bun` creates the same wasm component plus a Bun panel module; `anth app
+build` runs both toolchains and updates the manifest hashes. The same commands
+are available from the `anth` binary in a release, so `anth app build` and
+`cargo anth app build` are equivalent. `anth.toml` at the project root is the
+only configuration.
+
 ## Building an app
 
 The documented flow, with the SDK:

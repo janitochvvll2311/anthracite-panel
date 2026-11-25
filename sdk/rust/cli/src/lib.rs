@@ -111,6 +111,14 @@ commands:
   app <alias|id> <verb> [--flag <value>] [--flag] [--no-flag]
                         invoke a generated app verb
 
+local development (no engine socket):
+  app new <id> [--lang rust|bun] [--dir <path>]
+  app build [--project <dir>]
+  app package [--project <dir>] [--key <path>]
+  app sign [--project <dir>] [--key <path>]
+  app verify [--project <dir>] [--public-key <hex>]
+  app check [--project <dir>]
+
 options:
   --socket <path>       engine socket; then ANTH_SOCKET, then /run/anth/engine.sock
   -h, --help            show this message
