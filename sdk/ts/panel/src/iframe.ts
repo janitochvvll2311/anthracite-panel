@@ -21,7 +21,9 @@ export type FrameContext = {
     sha256: string;
     app: string;
   };
-  panel: { slots: string[]; version: string };
+  /// The panel's declared layout mode, so an app can adapt to the explicit
+  /// desktop/tablet/mobile selector rather than only to its iframe width.
+  panel: { slots: string[]; version: string; viewport?: string };
   kind: "view" | "action" | "settings" | "modal";
   /// Opaque data the panel passed when opening this view.
   params?: unknown;
@@ -53,6 +55,8 @@ export type FrameHandle = {
   snapshot: () => Promise<unknown>;
   /// Tells the module whether its pane is on screen, so it can pause polling.
   setVisible: (visible: boolean) => void;
+  /// Tells the module the panel's layout mode (`desktop`, `tablet`, `mobile`).
+  setViewport: (viewport: string) => void;
   /// Sends a local action tag and an optional payload to the module.
   action: (tag: string, payload?: unknown) => void;
   /// Restores the module's last focused control.
@@ -204,6 +208,13 @@ export async function mountFrame(
     );
   };
 
+  const setViewport = (viewport: string): void => {
+    iframe.contentWindow?.postMessage(
+      { type: "anth:viewport", token, viewport },
+      "*",
+    );
+  };
+
   const focus = (): void => {
     iframe.contentWindow?.postMessage({ type: "anth:focus", token }, "*");
   };
@@ -297,6 +308,7 @@ export async function mountFrame(
           requestClose,
           snapshot: requestSnapshot,
           setVisible,
+          setViewport,
           action,
           focus,
         });

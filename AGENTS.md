@@ -84,6 +84,9 @@ cargo clippy --workspace --all-targets -- -D warnings   # inside each workspace
 
 bun install && bun run build                            # from the repo root
 
+# the panel dev server on 127.0.0.1:5173 (ANTH_DEV_LISTEN=0.0.0.0:5173 for a preview)
+scripts/dev.sh
+
 # the external-bundle acid test: build, sign, install, compose, serve, answer
 scripts/acid-test.sh
 

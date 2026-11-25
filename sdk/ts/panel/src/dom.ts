@@ -69,7 +69,7 @@ export function errorCard(
 export function frameContext(
   contribution: Contribution,
   kind: FrameContext["kind"],
-  panel: { slots: readonly string[]; version: string },
+  panel: { slots: readonly string[]; version: string; viewport?: string },
   params?: unknown,
 ): FrameContext {
   return {
@@ -79,7 +79,11 @@ export function frameContext(
       risk: contribution.app.risk,
     },
     contribution: { ...contribution.slot, app: contribution.app.id },
-    panel: { slots: [...panel.slots], version: panel.version },
+    panel: {
+      slots: [...panel.slots],
+      version: panel.version,
+      ...(panel.viewport === undefined ? {} : { viewport: panel.viewport }),
+    },
     kind,
     ...(params === undefined ? {} : { params }),
   };

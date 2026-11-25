@@ -33,9 +33,21 @@ cargo build --manifest-path demo/emulator/Cargo.toml --release
 cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulator -- \
   --binary target/release/host-emulator --out demo/dist
 
-cargo run --manifest-path panel/backend/Cargo.toml -- \
-  --config demo/config.toml --listen 127.0.0.1:5176
+scripts/dev.sh
 ```
+
+`scripts/dev.sh` serves the developer demo on **127.0.0.1:5173** (override with
+`ANTH_DEV_LISTEN`, and the config with `ANTH_DEV_CONFIG`); 5173 is the dev port
+throughout the guide. A preview proxy needs a non-loopback address:
+
+```sh
+ANTH_DEV_LISTEN=0.0.0.0:5173 scripts/dev.sh
+```
+
+That is the only case where the script passes `--allow-remote`; the demo config
+disables signature checks, so the loopback default is deliberate. The script
+rebuilds `panel/frontend/dist` when a source is newer than the served module,
+because the debug backend reads the shell from disk.
 
 `demo/config.toml` turns signature checks and the third-party service switch on
 for development; it is a **debug** configuration and a release build refuses it.

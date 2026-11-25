@@ -1,0 +1,13 @@
+{
+  "name": "anth-proxy-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/main.ts --outfile dist/proxy.js --format esm --target browser && bun build src/modal.ts --outfile dist/proxy-modal.js --format esm --target browser",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

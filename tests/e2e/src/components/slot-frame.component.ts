@@ -34,6 +34,11 @@ export class SlotFrame {
     return this.frame.getByTestId(TESTID.slotRoot);
   }
 
+  /// The frame's `<html>`, which carries the panel's viewport mode.
+  get html(): Locator {
+    return this.frame.locator("html");
+  }
+
   get error(): Locator {
     return this.host.getByTestId(TESTID.errorCard);
   }
