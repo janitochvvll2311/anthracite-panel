@@ -146,11 +146,13 @@ index.json.sig    detached Ed25519 signature over those exact bytes
 - The index may list yanked versions and revoked signers. The UI warns; the
   engine refuses what its keyring or grant refuses.
 
-Minimal index:
+Minimal index (the `sequence` is monotonic per store; the cache refuses a
+replay with a lower value):
 
 ```json
 {
   "schema": 1,
+  "sequence": 1,
   "store": { "id": "org.example.store", "name": "Example Store" },
   "apps": [
     {

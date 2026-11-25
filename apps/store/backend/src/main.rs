@@ -117,6 +117,7 @@ impl Service {
             etag: response.header("etag").map(|value| value.to_string()),
             refreshed_at: now(),
             url: index_url,
+            sequence: 0,
         };
         self.cache
             .store_index(&source.id, &response.body, &signature, key, meta)
@@ -186,6 +187,7 @@ impl Service {
             etag: None,
             refreshed_at: now(),
             url: format!("file://{}", dir.display()),
+            sequence: 0,
         };
         self.cache
             .store_index(&source.id, &bytes, &signature, key, meta)
@@ -234,7 +236,7 @@ impl Service {
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();
         for (source, index) in self.indexes() {
-            for mut entry in index.search(&source.id, query, &categories, limit) {
+            for mut entry in index.search(&source.id, query, &categories, 100) {
                 if let Some(object) = entry.as_object_mut() {
                     object.remove("_source");
                 }
@@ -244,7 +246,14 @@ impl Service {
                 }
             }
         }
-        results.truncate(limit as usize);
+        results.sort_by_key(|entry| {
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_lowercase()
+        });
+        results.truncate(limit.min(100) as usize);
         Value::Array(results)
     }
 

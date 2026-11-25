@@ -440,13 +440,25 @@ export function mountManager(
         add.dataset.testid = "manager-store-signer-add";
         add.addEventListener("click", async () => {
           try {
+            const pasted = key.value.trim().toLowerCase();
+            if (!/^[0-9a-f]{64}$/.test(pasted)) {
+              setStoreStatus("The signer key is 64 hex characters.", true);
+              return;
+            }
+            const raw = Uint8Array.from(pasted.match(/.{2}/g) ?? [], (pair) =>
+              parseInt(pair, 16),
+            );
+            if ((await sha256Hex(raw.buffer as ArrayBuffer)) !== version.signer) {
+              setStoreStatus(
+                "That key is not the signer this catalogue names.",
+                true,
+              );
+              return;
+            }
             await api(options.request, "/api/engine/keys", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                public_key: key.value.trim(),
-                label: "store handoff",
-              }),
+              body: JSON.stringify({ public_key: pasted, label: "store handoff" }),
             });
             await loadKeys();
             renderStore();

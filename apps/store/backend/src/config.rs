@@ -155,12 +155,24 @@ pub fn is_private_host(host: &str) -> bool {
 }
 
 pub fn is_private_ip(address: std::net::IpAddr) -> bool {
+    // Normalize an IPv4-mapped IPv6 address before classifying it: std treats
+    // ::ffff:127.0.0.1 as neither loopback nor unique-local.
+    let address = match address {
+        std::net::IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map(std::net::IpAddr::V4)
+            .unwrap_or(std::net::IpAddr::V6(address)),
+        other => other,
+    };
     match address {
         std::net::IpAddr::V4(address) => {
+            let octets = address.octets();
             address.is_loopback()
                 || address.is_private()
                 || address.is_link_local()
                 || address.is_unspecified()
+                || address.is_broadcast()
+                || (octets[0] == 100 && (64..128).contains(&octets[1]))
         }
         std::net::IpAddr::V6(address) => {
             address.is_loopback()

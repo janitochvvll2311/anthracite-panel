@@ -15,6 +15,9 @@ pub const MAX_INDEX: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Index {
     pub schema: u32,
+    /// Monotonic per store; the cache refuses an older value.
+    #[serde(default)]
+    pub sequence: u64,
     pub store: StoreInfo,
     pub apps: Vec<IndexApp>,
 }
@@ -95,6 +98,12 @@ impl Index {
                         app.id, version.version
                     )));
                 }
+                anth_contract::parse_version(&version.version).map_err(|_| {
+                    Error::invalid(format!(
+                        "`{}` version `{}` is not semantic",
+                        app.id, version.version
+                    ))
+                })?;
                 if !matches!(version.channel.as_str(), "stable" | "beta" | "nightly") {
                     return Err(Error::invalid(format!(
                         "`{}` uses an unknown channel `{}`",
@@ -144,11 +153,23 @@ impl Index {
         Some((app, found))
     }
 
-    pub fn latest<'a>(&self, app: &'a IndexApp) -> Option<&'a IndexVersion> {
+    pub fn latest_for<'a>(
+        &'a self,
+        app: &'a IndexApp,
+        channel: Option<&str>,
+    ) -> Option<&'a IndexVersion> {
         app.versions
             .iter()
             .filter(|version| !version.yanked)
+            .filter(|version| channel.is_none_or(|wanted| version.channel == wanted))
             .max_by_key(|version| version.published_at)
+    }
+
+    /// The summary prefers a stable release and falls back to another channel
+    /// only when the app has no stable one.
+    pub fn latest<'a>(&'a self, app: &'a IndexApp) -> Option<&'a IndexVersion> {
+        self.latest_for(app, Some("stable"))
+            .or_else(|| self.latest_for(app, None))
     }
 
     pub fn search(
@@ -223,10 +244,24 @@ impl Index {
             let Some(app) = self.find(id) else {
                 continue;
             };
-            let Some(latest) = self.latest(app) else {
+            let channel = entry
+                .get("channel")
+                .and_then(Value::as_str)
+                .unwrap_or("stable");
+            let Some(latest) = self
+                .latest_for(app, Some(channel))
+                .or_else(|| self.latest_for(app, None))
+            else {
                 continue;
             };
-            if latest.version != current {
+            let newer = match (
+                anth_contract::parse_version(&latest.version),
+                anth_contract::parse_version(current),
+            ) {
+                (Ok(latest_version), Ok(current_version)) => latest_version > current_version,
+                _ => latest.version != current,
+            };
+            if newer {
                 updates.push(json!({
                     "id": id,
                     "installed": current,
@@ -333,6 +368,15 @@ mod tests {
                         "bundle_url": "notes.anth",
                         "signer": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "yanked": false
+                    }, {
+                        "version": "2.0.0-beta.1",
+                        "channel": "beta",
+                        "published_at": 9,
+                        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                        "size": 10,
+                        "bundle_url": "notes-beta.anth",
+                        "signer": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "yanked": false
                     }]
                 }]
             }"#,
@@ -344,6 +388,7 @@ mod tests {
     fn a_minimal_index_parses_and_shapes_the_views() {
         let index = index();
         let search = index.search("org.example.store", "note", &[], 10);
+        // The summary prefers stable even though beta is newer.
         assert_eq!(search[0]["latest"], "1.2.0");
         assert_eq!(search[0]["_source"], "org.example.store");
         let app = index.find("org.example.notes").expect("app");
@@ -365,14 +410,27 @@ mod tests {
         let index = index();
         let updates = index.updates(
             "org.example.store",
-            &[json!({"id": "org.example.notes", "version": "1.1.0"})],
+            &[json!({"id": "org.example.notes", "version": "1.1.0", "channel": "stable"})],
         );
         assert_eq!(updates[0]["latest"], "1.2.0");
         assert!(index
             .updates(
                 "org.example.store",
-                &[json!({"id": "org.example.notes", "version": "1.2.0"})]
+                &[json!({"id": "org.example.notes", "version": "1.2.0", "channel": "stable"})]
             )
             .is_empty());
+        // A downgrade is not an update.
+        assert!(index
+            .updates(
+                "org.example.store",
+                &[json!({"id": "org.example.notes", "version": "9.0.0", "channel": "stable"})]
+            )
+            .is_empty());
+        // A beta installer follows the beta channel.
+        let beta = index.updates(
+            "org.example.store",
+            &[json!({"id": "org.example.notes", "version": "1.2.0", "channel": "beta"})],
+        );
+        assert_eq!(beta[0]["latest"], "2.0.0-beta.1");
     }
 }

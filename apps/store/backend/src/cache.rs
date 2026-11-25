@@ -19,6 +19,8 @@ pub struct Meta {
     pub etag: Option<String>,
     pub refreshed_at: u64,
     pub url: String,
+    #[serde(default)]
+    pub sequence: u64,
 }
 
 pub struct Cache {
@@ -78,6 +80,16 @@ impl Cache {
     ) -> Result<Index, Error> {
         verify_index(bytes, signature, public_key)?;
         let index = Index::parse(bytes)?;
+        if let Some(cached) = self.meta(source) {
+            if index.sequence < cached.sequence {
+                return Err(Error::conflict(format!(
+                    "the catalogue sequence {} is older than the cached {}; refusing a replay",
+                    index.sequence, cached.sequence
+                )));
+            }
+        }
+        let mut meta = meta;
+        meta.sequence = index.sequence;
         fs::create_dir_all(self.index_dir()).map_err(|error| {
             Error::unavailable(format!("creating {}: {error}", self.index_dir().display()))
         })?;
@@ -164,7 +176,11 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {
             Error::unavailable(format!("creating {}: {error}", parent.display()))
         })?;
     }
-    let temp = path.with_extension(format!("tmp{}", std::process::id()));
+    let unique = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|time| time.as_nanos())
+        .unwrap_or(0);
+    let temp = path.with_extension(format!("tmp{}-{unique}", std::process::id()));
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)

@@ -64,12 +64,19 @@ anth-sign keygen --out store.key
 anth-sign file index.json --key store.key   # writes index.json.sig
 ```
 
-The index is advisory: the store shows publishers, digests, yanked versions and
+The index carries a monotonic `sequence` (per store). A refresh whose signature is
+valid but whose sequence is older than the cached one is refused as a replay, so
+a mirror cannot resurrect yanked or vulnerable versions. The index is advisory:
+the store shows publishers, digests, yanked versions and
 signer fingerprints, but the engine verifies the bundle signature, manifest,
 WIT and grant. The store's "trusted" flag means the source's key verifies the
 cached index, not that the publisher is trusted by the keyring.
 
-Indexes are capped at 8 MiB; bundles at 32 MiB. A refresh that fails signature
+Indexes are capped at 8 MiB; bundles at 32 MiB (the HTTP body is bounded while
+reading, not after buffering). The public resolver refuses private, loopback,
+link-local, CGNAT and IPv4-mapped addresses at connection time, so a DNS rebind
+cannot bypass the pre-flight check. Updates follow the installed channel
+(`stable` by default) and compare semantic versions; a downgrade is not offered. A refresh that fails signature
 verification or parsing leaves the previous cache untouched. A cached index or
 bundle is re-verified on every read; a corrupt cache is evicted, not served.
 

@@ -38,6 +38,7 @@ digest=$(sha256sum "$fixture/hello.anth" | cut -d' ' -f1)
 cat > "$fixture/index.json" <<EOF
 {
   "schema": 1,
+  "sequence": 1,
   "store": { "id": "org.example.store", "name": "Example Store" },
   "apps": [
     {

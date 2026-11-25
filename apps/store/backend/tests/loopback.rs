@@ -186,6 +186,31 @@ async fn a_signed_index_searches_and_downloads_verified_bytes() {
         .expect("search");
     assert_eq!(results[0]["id"], "org.example.notes");
 
+    // A replay with an older sequence is refused and the cache is kept.
+    let mut old = serde_json::from_slice::<Value>(&index_for_tamper).expect("index");
+    old["sequence"] = json!(0);
+    old["apps"][0]["name"] = json!("Old");
+    let old = serde_json::to_vec(&old).expect("old index");
+    let old_sig = sign(&key, &old);
+    let old_base = start_fixture(Arc::new(Fixture {
+        index: Arc::new(old),
+        signature: old_sig,
+        bundle: bundle.clone(),
+    }));
+    config["sources"][0]["url"] = json!(old_base);
+    std::fs::write(
+        data.join("sources.json"),
+        serde_json::to_vec_pretty(&config).expect("config"),
+    )
+    .expect("sources");
+    let replay_socket = dir.join("store-replay.sock");
+    let replay = start_service(&replay_socket, &data, &shared);
+    wait_socket(&replay_socket);
+    let replay_broker = anth_service::Broker::new(&replay_socket);
+    let replay_error = call(&replay_broker, "refresh", json!({"source": "native"})).await;
+    assert!(replay_error.is_err(), "an older sequence was accepted");
+    drop(replay);
+
     // A digest mismatch never reaches the manager.
     let mut bad = serde_json::from_slice::<Value>(&index_for_tamper).expect("index");
     bad["apps"][0]["versions"][0]["sha256"] = json!("ff".repeat(32));
@@ -230,6 +255,7 @@ async fn a_signed_index_searches_and_downloads_verified_bytes() {
 fn index_bytes(digest: &str, bundle: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "schema": 1,
+        "sequence": 1,
         "store": {"id": "org.example.store", "name": "Example"},
         "apps": [{
             "id": "org.example.notes",
