@@ -118,6 +118,7 @@ impl Service {
             refreshed_at: now(),
             url: index_url,
             sequence: 0,
+            store: String::new(),
         };
         self.cache
             .store_index(&source.id, &response.body, &signature, key, meta)
@@ -188,6 +189,7 @@ impl Service {
             refreshed_at: now(),
             url: format!("file://{}", dir.display()),
             sequence: 0,
+            store: String::new(),
         };
         self.cache
             .store_index(&source.id, &bytes, &signature, key, meta)

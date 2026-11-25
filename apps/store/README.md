@@ -64,9 +64,11 @@ anth-sign keygen --out store.key
 anth-sign file index.json --key store.key   # writes index.json.sig
 ```
 
-The index carries a monotonic `sequence` (per store). A refresh whose signature is
-valid but whose sequence is older than the cached one is refused as a replay, so
-a mirror cannot resurrect yanked or vulnerable versions. The index is advisory:
+The index carries a monotonic `sequence` (required, > 0) and its signed
+`store.id`. A refresh whose signature is valid but whose sequence is older than
+the cached one **for the same store id** is refused as a replay, so a mirror
+cannot resurrect yanked or vulnerable versions; repointing a source at another
+store starts a new sequence instead of blocking forever. The index is advisory:
 the store shows publishers, digests, yanked versions and
 signer fingerprints, but the engine verifies the bundle signature, manifest,
 WIT and grant. The store's "trusted" flag means the source's key verifies the

@@ -188,7 +188,7 @@ async fn a_signed_index_searches_and_downloads_verified_bytes() {
 
     // A replay with an older sequence is refused and the cache is kept.
     let mut old = serde_json::from_slice::<Value>(&index_for_tamper).expect("index");
-    old["sequence"] = json!(0);
+    old["sequence"] = json!(1);
     old["apps"][0]["name"] = json!("Old");
     let old = serde_json::to_vec(&old).expect("old index");
     let old_sig = sign(&key, &old);
@@ -255,7 +255,7 @@ async fn a_signed_index_searches_and_downloads_verified_bytes() {
 fn index_bytes(digest: &str, bundle: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "schema": 1,
-        "sequence": 1,
+        "sequence": 2,
         "store": {"id": "org.example.store", "name": "Example"},
         "apps": [{
             "id": "org.example.notes",

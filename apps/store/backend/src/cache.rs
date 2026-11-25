@@ -21,6 +21,8 @@ pub struct Meta {
     pub url: String,
     #[serde(default)]
     pub sequence: u64,
+    #[serde(default)]
+    pub store: String,
 }
 
 pub struct Cache {
@@ -81,7 +83,7 @@ impl Cache {
         verify_index(bytes, signature, public_key)?;
         let index = Index::parse(bytes)?;
         if let Some(cached) = self.meta(source) {
-            if index.sequence < cached.sequence {
+            if cached.store == index.store.id && index.sequence < cached.sequence {
                 return Err(Error::conflict(format!(
                     "the catalogue sequence {} is older than the cached {}; refusing a replay",
                     index.sequence, cached.sequence
@@ -90,6 +92,7 @@ impl Cache {
         }
         let mut meta = meta;
         meta.sequence = index.sequence;
+        meta.store = index.store.id.clone();
         fs::create_dir_all(self.index_dir()).map_err(|error| {
             Error::unavailable(format!("creating {}: {error}", self.index_dir().display()))
         })?;

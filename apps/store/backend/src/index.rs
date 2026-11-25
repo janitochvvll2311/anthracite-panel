@@ -76,6 +76,11 @@ impl Index {
                 self.schema
             )));
         }
+        if self.sequence == 0 {
+            return Err(Error::invalid(
+                "the index has no sequence; a replay could not be refused",
+            ));
+        }
         if self.store.id.trim().is_empty() {
             return Err(Error::invalid("the index has no store id"));
         }
@@ -248,10 +253,7 @@ impl Index {
                 .get("channel")
                 .and_then(Value::as_str)
                 .unwrap_or("stable");
-            let Some(latest) = self
-                .latest_for(app, Some(channel))
-                .or_else(|| self.latest_for(app, None))
-            else {
+            let Some(latest) = self.latest_for(app, Some(channel)) else {
                 continue;
             };
             let newer = match (
@@ -352,6 +354,7 @@ mod tests {
         Index::parse(
             br#"{
                 "schema": 1,
+                "sequence": 1,
                 "store": {"id": "org.example.store", "name": "Example"},
                 "apps": [{
                     "id": "org.example.notes",
