@@ -25,7 +25,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "anth-api"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anth-auth",
  "anth-compose",
@@ -46,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "anth-auth"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anth-contract",
  "serde",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "anth-compose"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anth-contract",
  "base64",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "anth-contract"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "humantime",
  "semver",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "anth-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anth-api",
  "anth-auth",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "anth-panel"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anth-api",
  "anth-auth",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "anth-panel-backend"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anth-panel",
  "axum",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "anth-runtime"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anth-contract",
  "humantime",
