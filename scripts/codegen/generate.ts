@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type {
   Generation,
@@ -31,6 +31,15 @@ import { createHttp } from "./http";
 import { createCli } from "./cli";
 
 export function generate(appDir: string, catalog: string): Generation {
+  // The generated TypeScript package follows the SDK workspace version. Read it
+  // from the manifest so a release bump cannot leave the checked-in output stale.
+  const workspace = Bun.TOML.parse(
+    readFileSync(resolve(import.meta.dir, "../../sdk/rust/Cargo.toml"), "utf8"),
+  ) as any;
+  const version = workspace.workspace?.package?.version;
+  if (typeof version !== "string") {
+    fail("the SDK workspace has no version");
+  }
   const manifest = Bun.TOML.parse(
     readFileSync(join(appDir, "manifest.toml"), "utf8"),
   ) as any;
@@ -335,7 +344,7 @@ export function generate(appDir: string, catalog: string): Generation {
   const tsPackage = `${JSON.stringify(
     {
       name: "@anthracite/client",
-      version: "0.6.0",
+      version,
       private: true,
       type: "module",
       description: "Generated clients for Anthracite apps",
