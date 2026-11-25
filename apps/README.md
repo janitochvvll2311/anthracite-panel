@@ -21,7 +21,8 @@ apps/<app>/
 `apps/hello` is the minimal component and keeps `src/`, `wit/`, `web/` and a
 final `manifest.toml` because its `wasm/app.wasm` is committed. `apps/home`,
 `apps/fs`, `apps/terminal`, `apps/proc`, `apps/net`, `apps/storage`, `apps/accounts`,
-`apps/firewall`, `apps/certs` and `apps/proxy` have real Rust backends; the eight
+`apps/firewall`, `apps/certs`, `apps/proxy` and `apps/acme` have real Rust
+backends; the eight
 demo bundles use the shared
 fixture in `demo/emulator` as their backend, and their `frontend/` modules are
 what the demo bundles carry.
@@ -39,14 +40,15 @@ apps/accounts/build.sh      # local users, groups and guarded account changes
 apps/firewall/build.sh      # managed nftables table, rules and policies
 apps/certs/build.sh         # certificate inventory, custody and publication
 apps/proxy/build.sh         # reverse proxy: vhosts, TLS, WebSocket, HTTP/2
+apps/acme/build.sh          # ACME client: accounts, orders, HTTP-01 and DNS-01
 ```
 
 The native Files, Terminal, Processes, Network, Storage, Accounts and Firewall
-bundles replace the emulator bundle under the same app id; Certificates and
-Proxy are new native apps with no emulator counterpart. They declare `host`,
+bundles replace the emulator bundle under the same app id; Certificates,
+Proxy and ACME are new native apps with no emulator counterpart. They declare `host`,
 `exec`, `admin` and `socket` service classes, so approval needs
-`--accept-write --accept-admin --accept-host` according to the class (Proxy
-needs `--accept-write --accept-admin`).
+`--accept-write --accept-admin --accept-host` according to the class (Proxy and
+ACME need `--accept-write --accept-admin`).
 Their `manifest.toml.in` uses
 `{{app_name}}`, `{{app_summary}}`, `{{service_path}}`, `{{service_class}}` and
 `{{service_argv}}`; the emulator builder and the native build scripts fill them

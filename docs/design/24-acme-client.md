@@ -32,8 +32,9 @@ v1, wildcard issuance without DNS-01, or a general-purpose HTTP client for apps.
   are never returned by a route and never logged.
 - HTTP-01 does **not** bind port 80. The token directory is
   `--http01-root {shared}/acme/http-01` in argv; the client writes the key
-  authorization to `{shared}/acme/http-01/<token>` (`0600`) and relies on the
-  ingress that owns port 80 to serve `/.well-known/acme-challenge/<token>`. The
+  authorization to `{shared}/acme/http-01/<token>` (`0640`; the directory is
+  `0770` under the engine gid, because the ingress runs as another service uid)
+  and relies on the ingress that owns port 80 to serve `/.well-known/acme-challenge/<token>`. The
   proxy does this for a host with `acme = true`. Any other listener can read the
   same directory; this is the provider-agnostic seam.
 - Before telling the CA the challenge is ready, the client fetches
@@ -167,5 +168,14 @@ the challenge type and the exact next step for manual DNS, never the account key
   whose `auto-renew` is false.
 - HTTP-01 works with the proxy and with a non-Anthracite listener that reads the
   same token directory.
+
+## 8. Implementation notes
+
+The shipped WIT follows §3 with the additions recorded in the decision log:
+`issued-unstored` in `order-status`, `confirm-challenge` for the manual DNS-01
+solver (0005), and `staging-directories` in `capability` (0007). The directory
+allowlist, the private-network opt-in and `ca-bundle` are 0004; the custody of a
+key when the store is absent is 0006, and the split between the always-on
+protocol fixture and the Pebble QA gate is 0008.
 
 ---

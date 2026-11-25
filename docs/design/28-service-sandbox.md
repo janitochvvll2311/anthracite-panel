@@ -97,8 +97,12 @@ supervisor cannot fix a refusal by trying again.
   ([§29](29-v0.7-plan.md)).
 - Approval shows every root, its mode and the class.
 - The supervisor applies **Landlock** to every service: the declared roots plus
-  the implicit directories (`{socket}`, `{data}`, `{shared}`, `{broker}`) and the
-  directory of the staged binary. A kernel without Landlock refuses the launch.
+  the implicit directories (`{socket}`, `{data}`, `{shared}`, `{broker}`), the
+  directory of the staged binary, and the read-only lookup files
+  (`/etc/resolv.conf`, `/etc/hosts`, `/etc/nsswitch.conf`, `/etc/host.conf`,
+  `/etc/services`). Name resolution is part of the network contract; without
+  those files a service that resolves a host blocks until its caller times out.
+  A kernel without Landlock refuses the launch.
 - When the engine runs as root, each service gets a **per-service uid** derived
   from its app id; `{data}` and its socket directory are `0700` and owned by that
   uid, `{shared}` is `0770` with the engine gid, and the state root is `0711`
