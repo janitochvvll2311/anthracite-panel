@@ -1,5 +1,7 @@
 # Anthracite
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/janitochvvll2311)
+
 **A headless engine that composes apps; a panel is the application that hosts
 them.**
 
@@ -119,15 +121,25 @@ docs/       design, feature reports and the guide
 
 ## Project status
 
-`v0.6.0` is the final tag of its line and the code is complete through M5;
-`v0.6.1` publishes the same build with the official guide, the standalone
-bundles and the KolibSoftware registry images (`v0.6.1a` was the intermediate).
-The release process is implemented and exercised with signed release artifacts,
-but three
-operational items remain, and they are not code: GitHub Actions has had no
-runner (every job fails in about two seconds with `runner_id: 0`), no real
-long-lived release key has been used yet (the pre-release key is a rehearsal),
-and the native services have not been exercised on a deployment host.
+`v0.7.0` is the current release line: manifest v4, the sandbox L1, the broker
+and surface exports, and the operated edge apps. The previous `v0.6` line is
+preserved as tagged releases and documentation. The project is under active
+development; interfaces and bundle formats may change between minor releases.
+See [`docs/guide/release-notes.md`](docs/guide/release-notes.md) for the
+release history and known limitations.
+
+## Contributing
+
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before sending a change. Please report
+security issues privately through the process in [`SECURITY.md`](SECURITY.md),
+not in a public issue. Participation is covered by
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
+## Sponsor
+
+Anthracite is independent and has no ads or tracking. If it is useful to you,
+you can support the work through
+[GitHub Sponsors](https://github.com/sponsors/janitochvvll2311).
 
 ## License
 

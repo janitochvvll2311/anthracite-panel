@@ -17,3 +17,29 @@ panel/frontend/dist
 apps/*/wit/deps/
 tests/acid/app/wit/deps/
 /release/
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+data/
+**/data/
+state/
+**/state/
+credentials.txt
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+.netrc
+.npmrc
+
+# Editor and OS noise
+.idea/
+.vscode/
+Thumbs.db

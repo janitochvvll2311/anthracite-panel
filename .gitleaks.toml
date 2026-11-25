@@ -1,0 +1,10 @@
+title = "Anthracite secret scan"
+
+# Historical tests contain a fixed WireGuard fixture key, not a production
+# credential. Keep the scan clean without hiding any other path.
+[allowlist]
+description = "WireGuard fixture keys in historical test files"
+paths = [
+  '''plugins/wireguard/src/logic/tests\.rs''',
+  '''backend/anth-panel/tests/plugin_wireguard\.rs''',
+]

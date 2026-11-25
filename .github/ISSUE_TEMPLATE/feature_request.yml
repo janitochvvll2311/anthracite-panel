@@ -1,0 +1,47 @@
+name: Feature request
+description: Propose a capability or an improvement.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the solution. Architecture changes should
+        reference `DESIGN.md` and the relevant section under `docs/design/`.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard, missing or unsafe today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What shape should the change take?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you reject and why?
+    validations:
+      required: false
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and risks
+      description: Compatibility, security, performance, migration or operator impact.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

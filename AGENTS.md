@@ -10,31 +10,17 @@ and to the design where the reason matters.
 
 ## State
 
-`v0.6.0` is complete through M5: engine, composition, runtime, the official panel
-and the second minimal panel, generated Rust/TS clients, first-boot credentials,
-TCP and panel sessions, origin checks and security headers, service apps on the
-v3 contract, streams/events/quotas, the `system` tier with a compiled distribution
-key and the `anth-sign`/`release.sh` ceremony, the sandbox baseline (L0) and the
-external-bundle acid test. Phases 0–9 of `docs/design/18-v0.6-plan.md` shipped as
-PRs into `v0.6.0`; the evidence is `docs/features/v0.6-close/report.md`.
-`v0.6.1` is the final publish of the 0.6 line: the same code plus the official
-guide, the standalone bundle assets and the images in the KolibSoftware
-registry; `v0.6.1a` was the intermediate.
-
-What is left is operational, not code: GitHub Actions has no runner (every job
-fails in two seconds with `runner_id: 0`), no real release key has been used yet,
-and the native services have not been exercised on a deployment host.
-
-`v0.7.0`/M6 is complete and tagged at `1f09a3a`: manifest v4, sandbox L1 and
-the port capability, the broker/audit/surface exports, and the five apps
-(`certs`, `acme`, `proxy`, `containers`, `store`). The edge composition is
+`v0.7.0` is the current release line: manifest v4, sandbox L1 and the port
+capability, the broker/audit/surface exports, and the five edge apps (`certs`,
+`acme`, `proxy`, `containers`, `store`). The edge composition is
 `compositions/edge.toml`; the removal matrix is
 `engine/api/tests/golden.rs`; the release gate and manual QA are
 `docs/guide/release-notes.md` and `docs/guide/edge-qa.md`. The close report is
-`docs/features/v0-7-0/report.md`. The next milestone is not planned yet.
+`docs/features/v0-7-0/report.md`.
 
-`v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
-code, its crates or its structure.
+The previous `v0.6` line is preserved in tags and the guide. `v0.4.0` is frozen
+at tag `v0.4.0-freeze`. It is reference only: do not copy its code, its crates or
+its structure.
 
 ## Tags
 
@@ -49,14 +35,13 @@ publishes and is never moved or reused.
 
 ## Toolchain
 
-- Rust `1.99.1` (`CARGO_HOME=/tools/cargo`, `RUSTUP_HOME=/tools/rustup`).
+- Rust `1.99.1` (`rust-toolchain.toml`).
 - Installed targets: `x86_64-unknown-linux-musl`, `wasm32-unknown-unknown` and
   `wasm32-wasip2`. **Apps build for `wasm32-unknown-unknown`**; `wasm32-wasip2`
   links WASI and every app built with it would fail the world check.
-- `wasm-tools` (`/tools/cargo/bin/wasm-tools`) wraps the module into a component
-  and feeds the codegen. `cargo-component` is not needed.
-- Bun `1.4.4` under `/tools/bun` (`BUN_INSTALL=/tools/bun`).
-- If a wrapper is missing after an environment rebuild, run `. /tools/env.sh`.
+- `wasm-tools` `1.263.0` wraps the module into a component and feeds the codegen.
+  `cargo-component` is not needed.
+- Bun `1.4.4`.
 - The four Rust workspaces share one `build.target-dir` through the root
   `.cargo/config.toml`. Do not add per-workspace targets.
 
