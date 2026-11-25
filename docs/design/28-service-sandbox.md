@@ -108,7 +108,7 @@ supervisor cannot fix a refusal by trying again.
   report a missing runtime instead of failing to launch. A kernel without
   Landlock refuses the launch.
 - When the engine runs as root, each service gets a **per-service uid** derived
-  from its app id; `{data}` and its socket directory are `0700` and owned by that
+  from its app id and its supplementary groups are dropped; `{data}` and its socket directory are `0700` and owned by that
   uid, `{shared}` is `0770` with the engine gid, and the state root is `0711`
   (traversable, not listable). The verified binary is copied into the service's
   socket directory so the bundle tree stays unreadable.

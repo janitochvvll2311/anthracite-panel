@@ -1711,6 +1711,7 @@ struct GrantBody {
 fn check_socket_access(
     roots: &[String],
     gid: u32,
+    groups: &[u32],
     owner: Option<u32>,
     service_uid: u32,
 ) -> Result<(), Error> {
@@ -1728,7 +1729,8 @@ fn check_socket_access(
             continue;
         }
         let mode = metadata.mode() & 0o777;
-        let group_ok = metadata.gid() == gid && (mode & 0o020) != 0;
+        let group_ok =
+            (metadata.gid() == gid || groups.contains(&metadata.gid())) && (mode & 0o020) != 0;
         let owner_ok = owner
             .map(|uid| metadata.uid() == uid && (mode & 0o200) != 0)
             .unwrap_or(false);
@@ -1741,7 +1743,14 @@ fn check_socket_access(
                 metadata.gid()
             )));
         }
-        check_traversal(std::path::Path::new(path), gid, service_uid)?;
+        check_traversal(std::path::Path::new(path), gid, groups, service_uid)?;
+        // A symlink root is useful (a stable name for a moving socket), but the
+        // real target's ancestors need search permission too.
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            if canonical != std::path::Path::new(path) {
+                check_traversal(&canonical, gid, groups, service_uid)?;
+            }
+        }
     }
     Ok(())
 }
@@ -1749,7 +1758,12 @@ fn check_socket_access(
 /// `connect(2)` needs search permission on every ancestor. A world-writable
 /// socket under a 0700 directory still fails, which is the rootless Podman
 /// socket read from a root engine.
-fn check_traversal(path: &std::path::Path, gid: u32, uid: u32) -> Result<(), Error> {
+fn check_traversal(
+    path: &std::path::Path,
+    gid: u32,
+    groups: &[u32],
+    uid: u32,
+) -> Result<(), Error> {
     use std::os::unix::fs::MetadataExt;
     let mut current = path.parent();
     while let Some(dir) = current {
@@ -1757,7 +1771,8 @@ fn check_traversal(path: &std::path::Path, gid: u32, uid: u32) -> Result<(), Err
             let mode = metadata.mode() & 0o777;
             let ok = uid == 0
                 || (metadata.uid() == uid && (mode & 0o100) != 0)
-                || (metadata.gid() == gid && (mode & 0o010) != 0)
+                || ((metadata.gid() == gid || groups.contains(&metadata.gid()))
+                    && (mode & 0o010) != 0)
                 || (mode & 0o001) != 0;
             if !ok {
                 return Err(Error::denied(format!(
@@ -1772,6 +1787,25 @@ fn check_traversal(path: &std::path::Path, gid: u32, uid: u32) -> Result<(), Err
         current = dir.parent();
     }
     Ok(())
+}
+
+/// The engine supplementary groups; an unprivileged service keeps them, so
+/// approval must accept a socket reachable through one.
+fn engine_groups() -> Vec<u32> {
+    // SAFETY: getgroups writes at most `count` u32 values into the buffer.
+    unsafe {
+        let count = libc::getgroups(0, std::ptr::null_mut());
+        if count <= 0 {
+            return Vec::new();
+        }
+        let mut buffer = vec![0u32; count as usize];
+        let written = libc::getgroups(count, buffer.as_mut_ptr());
+        if written < 0 {
+            return Vec::new();
+        }
+        buffer.truncate(written as usize);
+        buffer
+    }
 }
 
 /// Approves the app: computes its risk over the installed graph, freezes the
@@ -1806,7 +1840,12 @@ async fn approve_app(
         } else {
             euid
         };
-        if let Err(error) = check_socket_access(&service.roots, gid, owner, service_uid) {
+        let groups = if euid == 0 {
+            Vec::new()
+        } else {
+            engine_groups()
+        };
+        if let Err(error) = check_socket_access(&service.roots, gid, &groups, owner, service_uid) {
             return Err(audit_or_error(
                 audit_failure(
                     apps,

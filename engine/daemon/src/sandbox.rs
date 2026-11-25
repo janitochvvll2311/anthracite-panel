@@ -337,6 +337,13 @@ pub fn become_service(uid: u32, gid: u32, keep_bind: bool) -> Result<(), io::Err
         if libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) == -1 {
             return Err(io::Error::last_os_error());
         }
+        // The child must not inherit the engine's supplementary groups: a
+        // service would otherwise reach a socket or file through the operator's
+        // docker group after the uid drop. Without root there is nothing to
+        // drop (the service shares the engine identity).
+        if libc::geteuid() == 0 && libc::setgroups(0, std::ptr::null()) == -1 {
+            return Err(io::Error::last_os_error());
+        }
         if libc::setresgid(gid, gid, gid) == -1 {
             return Err(io::Error::last_os_error());
         }

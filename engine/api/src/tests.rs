@@ -3002,17 +3002,46 @@ fn a_runtime_socket_needs_the_service_gid_or_world_write() {
     let uid = metadata.uid();
     let root = path.to_string_lossy().into_owned();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
-    assert!(check_socket_access(std::slice::from_ref(&root), gid, None, 0).is_err());
-    assert!(check_socket_access(std::slice::from_ref(&root), gid, Some(uid), uid).is_ok());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], None, 0).is_err());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], Some(uid), uid).is_ok());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("mode");
-    assert!(check_socket_access(&[format!("{root}:ro")], gid, None, 0).is_ok());
+    assert!(check_socket_access(&[format!("{root}:ro")], gid, &[], None, 0).is_ok());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).expect("mode");
-    assert!(check_socket_access(std::slice::from_ref(&root), gid, None, 0).is_ok());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], None, 0).is_ok());
     // A world-writable socket under a directory the service cannot search.
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("dir mode");
     let stranger = uid.wrapping_add(1);
-    assert!(check_socket_access(std::slice::from_ref(&root), gid, None, stranger).is_err());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], None, stranger).is_err());
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("dir mode");
-    assert!(check_socket_access(std::slice::from_ref(&root), gid, None, stranger).is_ok());
+    assert!(check_socket_access(std::slice::from_ref(&root), gid, &[], None, stranger).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_symlinked_socket_checks_the_real_ancestors() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let base = std::env::temp_dir()
+        .join("anthracite-panel")
+        .join(format!("api-socket-symlink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let hidden = base.join("hidden");
+    let open = base.join("open");
+    std::fs::create_dir_all(&hidden).expect("hidden");
+    std::fs::create_dir_all(&open).expect("open");
+    let target = hidden.join("runtime.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&target).expect("socket");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o666)).expect("mode");
+    let link = open.join("runtime.sock");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+    let metadata = std::fs::metadata(&target).expect("metadata");
+    let gid = metadata.gid();
+    let stranger = metadata.uid().wrapping_add(1);
+    let declared = link.to_string_lossy().into_owned();
+    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o700)).expect("hidden mode");
+    assert!(
+        check_socket_access(std::slice::from_ref(&declared), gid, &[], None, stranger).is_err()
+    );
+    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o755)).expect("hidden mode");
+    assert!(check_socket_access(std::slice::from_ref(&declared), gid, &[], None, stranger).is_ok());
+    let _ = std::fs::remove_dir_all(&base);
 }

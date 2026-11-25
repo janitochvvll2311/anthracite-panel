@@ -28,8 +28,11 @@ roots = ["/var/run/docker.sock"]
   values and registry credentials never reach an audit record or a log.
 - A missing socket, a permission error and an unsupported API version are typed
   errors: the app starts and the view shows the error, the engine keeps running.
-- The service runs as a dedicated uid with the **engine gid and no supplementary
-  groups**. Docker installs its socket `root:docker 0660`; grant the engine gid
+- When the engine is root, the service runs with a **dedicated uid, the engine
+  gid and no supplementary groups** (the supervisor drops them before the uid
+  change). An unprivileged engine runs the service as its own identity and
+  keeps its groups; approval accepts a socket reachable through one of those
+  groups. Docker installs its socket `root:docker 0660`; grant the engine gid
   before approval:
 
   ```sh
