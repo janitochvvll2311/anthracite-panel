@@ -33,14 +33,16 @@ fn fixture() -> PathBuf {
         .join("examples")
         .join("echo_service");
     // Always let cargo decide whether the example is current: a stale binary
-    // would hide changes such as the `status` fields this suite asserts.
+    // would hide changes such as the `status` fields this suite asserts. Build
+    // it statically because the Landlock view has no ELF loader.
     static BUILD: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     BUILD.get_or_init(|| {
         let status = std::process::Command::new(
             std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()),
         )
-        .args(["build", "--example", "echo_service", "--manifest-path"])
+        .args(["rustc", "--example", "echo_service", "--manifest-path"])
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .args(["--", "-C", "target-feature=+crt-static"])
         .status()
         .expect("build the service fixture");
         assert!(status.success(), "the service fixture did not build");
