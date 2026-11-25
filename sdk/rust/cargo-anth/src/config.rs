@@ -83,7 +83,7 @@ pub struct Sign {
 #[serde(deny_unknown_fields)]
 pub struct Panel {
     #[allow(dead_code)]
-    #[serde(default = "default_port")]
+    #[serde(default = "default_port", rename = "dev-port")]
     pub dev_port: u16,
 }
 
@@ -191,20 +191,22 @@ fn validate(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// A reverse-DNS id: at least two labels, ASCII alphanumerics and `-`, no empty
-/// label and no leading or trailing `-`.
+/// A reverse-DNS id whose labels are WIT kebab-case: lowercase letters and
+/// digits, one or more segments separated by a single `-`.
 pub fn validate_id(id: &str) -> Result<()> {
     let labels: Vec<&str> = id.split('.').collect();
     if labels.len() < 2 {
         bail!("`{id}` is not a reverse-DNS id (for example org.example.notes)");
     }
     for label in &labels {
-        if label.is_empty()
-            || label.starts_with('-')
-            || label.ends_with('-')
-            || !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        {
-            bail!("`{id}` has an invalid label `{label}`");
+        let wit_label = !label.is_empty()
+            && label.split('-').all(|part| {
+                let mut chars = part.chars();
+                chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                    && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            });
+        if !wit_label {
+            bail!("`{id}` has an invalid WIT label `{label}`");
         }
     }
     Ok(())
@@ -265,6 +267,9 @@ mod tests {
         assert!(validate_id("org..notes").is_err());
         assert!(validate_id("org.example.-notes").is_err());
         assert!(validate_id("org.example.no_tes").is_err());
+        assert!(validate_id("Org.Example.Notes").is_err());
+        assert!(validate_id("org.123.notes").is_err());
+        assert!(validate_id("org.example.notes--app").is_err());
     }
 
     #[test]
@@ -273,6 +278,18 @@ mod tests {
         assert_eq!(namespace("com.acme.widget"), "acme:widget");
         assert_eq!(short_name("org.example.notes"), "notes");
         assert_eq!(display_name("org.example.notes-app"), "Notes App");
+    }
+
+    #[test]
+    fn the_panel_section_accepts_dev_port() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(FILE),
+            "[app]\nid = \"org.example.notes\"\nlang = \"bun\"\n\n[panel]\ndev-port = 5173\n",
+        )
+        .expect("write");
+        let project = Project::load(Some(dir.path())).expect("load");
+        assert_eq!(project.config.panel.map(|panel| panel.dev_port), Some(5173));
     }
 
     #[test]

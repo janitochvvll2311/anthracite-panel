@@ -12,7 +12,12 @@ use crate::config::Project;
 
 pub fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let Some(command) = args.next() else {
+    let mut command = args.next();
+    // `cargo anth ...` invokes `cargo-anth anth ...`: drop cargo's subcommand.
+    if command.as_deref() == Some("anth") {
+        command = args.next();
+    }
+    let Some(command) = command else {
         help();
         return Ok(());
     };

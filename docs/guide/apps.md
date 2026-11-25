@@ -227,23 +227,26 @@ verify — fails loudly. The same kit is what the release and CI run.
 
 ## A standalone project
 
-The `v0.8.0` CLI creates a project outside this repository:
+The `v0.8.0` CLI creates a project outside this repository. The GitHub Release
+`bin/` carries `anth-sign` and `anth-conformance`; put that directory on `PATH`
+(or build `anth-signer`/`anth-conformance` from the workspace).
 
 ```sh
 cargo install cargo-anth
 cargo anth app new org.example.notes --lang rust
 cd notes
+anth-sign keygen --out dev.key
 cargo anth app build
 cargo anth app check
 cargo anth app package --key dev.key
-cargo anth app verify --public-key <hex-public-key>
+cargo anth app verify --public-key "$(anth-sign public-key --key dev.key | awk '/^public_key/ {print $2}')"
 ```
 
-`--lang bun` creates the same wasm component plus a Bun panel module; `anth app
-build` runs both toolchains and updates the manifest hashes. The same commands
-are available from the `anth` binary in a release, so `anth app build` and
-`cargo anth app build` are equivalent. `anth.toml` at the project root is the
-only configuration.
+`--lang bun` creates the same wasm component plus a Bun panel module; `cargo
+anth app build` runs both toolchains and updates the manifest hashes. The same
+commands are available from the `anth` binary in a release, so `anth app build`
+and `cargo anth app build` are equivalent. `anth.toml` at the project root is
+the only configuration.
 
 ## Building an app
 

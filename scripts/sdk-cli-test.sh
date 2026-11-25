@@ -38,10 +38,10 @@ run() {
     "$bin/anth" app new "org.example.$name" --dir "$project" --lang "$lang"
     (
         cd "$project"
-        "$bin/cargo-anth" app build
-        "$bin/cargo-anth" app check
-        "$bin/cargo-anth" app package --key "$dir/dev.key"
-        "$bin/cargo-anth" app verify --public-key "$public"
+        cargo anth app build
+        cargo anth app check
+        cargo anth app package --key "$dir/dev.key"
+        cargo anth app verify --public-key "$public"
     )
     [ -f "$project/dist/org.example.$name-0.1.0.anth" ] || {
         echo "no bundle for $name" >&2

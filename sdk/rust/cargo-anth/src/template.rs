@@ -37,7 +37,7 @@ pub fn create(id: &str, lang: &str, dir: Option<&Path>) -> Result<PathBuf> {
     write(
         &target,
         "src/lib.rs",
-        &lib_rs(prefix, &short.replace('-', "_")),
+        &lib_rs(&prefix.replace('-', "_"), &short.replace('-', "_")),
     )?;
     write(&target, ".gitignore", "/target\n/dist\n/wasm\n")?;
     write(&target, "README.md", &readme(id, short, &name, lang))?;
@@ -234,16 +234,18 @@ fn readme(id: &str, short: &str, name: &str, lang: &str) -> String {
 `{id}` — an Anthracite app.
 
 ```sh
-anth app build
-anth app package
-anth app sign --key dev.key
-anth app verify --key <public-key>
+anth-sign keygen --out dev.key
+cargo anth app build
+cargo anth app check
+cargo anth app package --key dev.key
+cargo anth app verify --public-key <public-key>
 ```
 
-`anth app build` compiles `{short}` for wasm32-unknown-unknown, wraps it with
+`cargo anth app build` compiles `{short}` for wasm32-unknown-unknown, wraps it with
 `wasm-tools`, and updates the manifest hashes.{ui}
-The generated tree is standalone; it does not depend on the Anthracite
-repository.
+`anth-sign` and `anth-conformance` ship in the GitHub Release `bin/`; put that
+directory on `PATH`. The generated tree is standalone; it does not depend on
+the Anthracite repository.
 "#
     )
 }

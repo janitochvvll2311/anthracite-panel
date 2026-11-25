@@ -10,7 +10,7 @@ How is the Anthracite CLI integrated into cargo and Bun?
 
 ## Decision
 
-One Rust crate, cargo-anth, installs the binaries cargo-anth and anth. cargo anth uses cargo's cargo-<subcommand> discovery, like clippy or nextest. Bun uses bunx @anth-panel/cli, bun create @anth-panel/app and an optional bunfig preload plugin; there is no native bun anth subcommand.
+One Rust library backs two entry points: the cargo-anth crate installs the cargo-anth binary, and the anth client (anth-cli) includes the same app commands. cargo anth uses cargo's cargo-<subcommand> discovery, like clippy or nextest; cargo passes anth as the first argument and the binary drops it. The release ships both binaries. Bun uses bunx @anth-panel/cli, bun create @anth-panel/app and an optional bunfig preload plugin; there is no native bun anth subcommand.
 
 ## Rationale
 
