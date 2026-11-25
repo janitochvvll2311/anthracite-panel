@@ -850,7 +850,14 @@ fn deny_layer(reason: &str) -> &'static str {
     }
 }
 
-fn set_limit(resource: libc::c_int, desired: libc::rlim_t) -> std::io::Result<()> {
+/// The resource argument of `getrlimit`/`setrlimit`. glibc takes an unsigned
+/// `__rlimit_resource_t`; musl and the other Unix targets take a `c_int`.
+#[cfg(target_env = "gnu")]
+type RlimitResource = libc::__rlimit_resource_t;
+#[cfg(not(target_env = "gnu"))]
+type RlimitResource = libc::c_int;
+
+fn set_limit(resource: RlimitResource, desired: libc::rlim_t) -> std::io::Result<()> {
     let mut current: libc::rlimit = unsafe { std::mem::zeroed() };
     if unsafe { libc::getrlimit(resource, &mut current) } == -1 {
         return Err(std::io::Error::last_os_error());
