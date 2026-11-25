@@ -142,10 +142,10 @@ Tests pin known vectors before and after the move.
 
 ## 7. Distribution mechanics
 
-- **crates.io**: `anth-bundle` → `anth-guest` → `anth-service` → `anth-client` →
-  `cargo-anth`. Path dependencies also carry a `version`, and every crate has
-  `description`, `license`, `repository`, `readme`, keywords and categories.
-  `cargo publish --dry-run` is part of the gate.
+- **crates.io**: `anth-error` → `anth-bundle` → `anth-guest` → `anth-service` →
+  `anth-client` → `cargo-anth`. Path dependencies also carry a `version`, and
+  every crate has `description`, `license`, `repository`, `readme`, keywords and
+  categories. `cargo publish --dry-run` is part of the gate.
 - **npm**: ESM + `.d.ts`, `exports`, `files`, `publishConfig.access = public`,
   no `private`, no TypeScript source in the tarball. `bun pm pack --dry-run` is
   part of the gate. `bun publish --access public` is the publisher; provenance

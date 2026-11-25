@@ -192,9 +192,9 @@ prerequisites and the sandbox shipped through
 v0.8.0 turns the public repository into an installable SDK. One Rust CLI
 (`cargo anth` / `anth`) and one npm entry point (`bunx @anth-panel/cli`) create,
 build, package, sign and verify apps outside this repository. The public crates
-are `anth-bundle`, `anth-guest`, `anth-service`, `anth-client` and `cargo-anth`;
-the npm packages live under `@anth-panel`. The engine and its authority stay
-internal.
+are `anth-error`, `anth-bundle`, `anth-guest`, `anth-service`, `anth-client` and
+`cargo-anth`; the npm packages live under `@anth-panel`. The engine and its
+authority stay internal.
 
 **Done when:** `cargo install cargo-anth` and `bunx @anth-panel/cli` work in a
 clean environment, the templates build/sign/verify without the monorepo, and the
