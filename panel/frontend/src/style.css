@@ -1411,6 +1411,16 @@ button.drawer-close {
   font: 12px inherit;
 }
 
+.mgr-input {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-soft);
+  color: var(--text);
+  font: 12px inherit;
+  min-width: 180px;
+}
+
 .mgr-check {
   display: flex;
   align-items: center;

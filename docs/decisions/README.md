@@ -14,3 +14,5 @@ Decisiones registradas durante la implementación de features.
 | [0008](0008-how-is-the-acme-gate-automated-when-ci-cannot-download-or-run-pe.md) | 2026-11-25 | How is the ACME gate automated when CI cannot download or run Pebble? |
 | [0009](0009-how-does-the-container-manager-hold-the-runtime-socket.md) | 2026-11-25 | How does the container manager hold the runtime socket? |
 | [0010](0010-how-do-exec-sessions-work-and-how-is-the-runtime-tested-without-.md) | 2026-11-25 | How do exec sessions work and how is the runtime tested without Docker? |
+| [0011](0011-where-does-the-store-s-catalogue-trust-live-and-who-installs.md) | 2026-11-25 | Where does the store's catalogue trust live and who installs? |
+| [0012](0012-when-is-a-bundle-digest-checked-relative-to-the-download-stream.md) | 2026-11-25 | When is a bundle digest checked relative to the download stream? |

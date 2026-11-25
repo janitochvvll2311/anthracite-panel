@@ -8,7 +8,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anth_compose::bundle;
 use anth_compose::signature;
@@ -43,6 +43,19 @@ pub fn sign(dir: &Path, key_path: &Path) -> Result<PublicKey, Error> {
             dir.join("manifest.sig").display()
         ))
     })?;
+    public_key(&key)
+}
+
+/// Writes `<path>.sig` over the exact bytes of `path`, the format a catalogue
+/// publisher uses (`anth-sign file index.json --key ...`).
+pub fn sign_file(path: &Path, key_path: &Path) -> Result<PublicKey, Error> {
+    let key = read_key(key_path)?;
+    let bytes = fs::read(path)
+        .map_err(|error| Error::not_found(format!("reading {}: {error}", path.display())))?;
+    let signature = signature::signature_base64(&key.sign(&bytes).to_bytes());
+    let target = PathBuf::from(format!("{}.sig", path.display()));
+    fs::write(&target, format!("{signature}\n"))
+        .map_err(|error| Error::internal(format!("writing {}: {error}", target.display())))?;
     public_key(&key)
 }
 
@@ -290,6 +303,24 @@ mod tests {
         )
         .expect_err("tampered WIT");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn a_file_signature_covers_the_exact_bytes() {
+        let dir = scratch("index");
+        let key = dir.join("key");
+        let generated = generate_key(&key).expect("keygen");
+        let path = dir.join("index.json");
+        let bytes = br#"{"schema":1,"store":{"id":"org.example.store"},"apps":[]}"#;
+        fs::write(&path, bytes).expect("index");
+        let public = sign_file(&path, &key).expect("sign");
+        assert_eq!(public.key, generated.key);
+        let signature = fs::read_to_string(dir.join("index.json.sig")).expect("signature");
+        anth_compose::signature::verify(bytes, &signature, &public.key).expect("verifies");
+        let mut tampered = bytes.to_vec();
+        tampered[0] = b'[';
+        assert!(anth_compose::signature::verify(&tampered, &signature, &public.key).is_err());
         fs::remove_dir_all(&dir).expect("cleanup");
     }
 }

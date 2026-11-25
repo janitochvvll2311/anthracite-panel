@@ -1,0 +1,13 @@
+{
+  "name": "anth-store-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/main.ts --outfile dist/store.js --format esm --target browser && bun build src/modal.ts --outfile dist/store-modal.js --format esm --target browser",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

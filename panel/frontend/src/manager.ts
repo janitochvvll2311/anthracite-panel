@@ -26,6 +26,39 @@ type AppView = {
   };
 };
 
+
+type StoreSummary = {
+  id: string;
+  name: string;
+  summary: string;
+  publisher: string;
+  categories: string[];
+  latest: string;
+};
+
+type StoreVersion = {
+  version: string;
+  channel: string;
+  "published-at": number;
+  sha256: string;
+  size: number;
+  "bundle-url": string;
+  signer: string;
+  yanked: boolean;
+};
+
+type StoreDetail = {
+  id: string;
+  name: string;
+  summary: string;
+  description: string;
+  publisher: string;
+  license: string;
+  homepage: string | null;
+  categories: string[];
+  versions: StoreVersion[];
+};
+
 type AppList = {
   apps: AppView[];
   problems: { app: string; message: string }[];
@@ -34,6 +67,15 @@ type AppList = {
 type Composition = {
   version: number;
   profile: { id: string; apps: string[] }[];
+};
+
+type SurfaceAppView = {
+  id: string;
+  exports?: string[];
+};
+
+type SurfaceView = {
+  apps?: SurfaceAppView[];
 };
 
 type CompositionView = {
@@ -163,6 +205,12 @@ export function mountManager(
   let auditProblems: string[] = [];
   let auditLoading = false;
   let disposed = false;
+  let storeProvider: string | null = null;
+  let storeResults: StoreSummary[] = [];
+  let storeDetail: StoreDetail | null = null;
+  let trustedKeys = new Set<string>();
+  let distribution = "";
+  let surface: SurfaceView | null = null;
 
   root.innerHTML = `
     <section class="mgr-section">
@@ -184,6 +232,23 @@ export function mountManager(
           <input type="file" accept=".anth,application/zip" data-upgrade-file />
           <button class="mgr-btn" type="button" data-upgrade>Upgrade</button>
         </div>
+      </div>
+    </section>
+
+    <section class="mgr-section" data-testid="manager-store">
+      <header>
+        <strong>Store</strong>
+        <div class="mgr-form">
+          <input class="mgr-input" data-store-query placeholder="Search apps" />
+          <button class="mgr-btn" type="button" data-store-search>Search</button>
+          <button class="mgr-btn" type="button" data-store-catalogs>Refresh catalogues</button>
+        </div>
+      </header>
+      <div class="mgr-section-body">
+        <p class="mgr-hint" data-store-provider></p>
+        <div data-store-results></div>
+        <div data-store-detail></div>
+        <p class="mgr-status" data-store-status role="status"></p>
       </div>
     </section>
 
@@ -228,11 +293,223 @@ export function mountManager(
   const installFile = root.querySelector<HTMLInputElement>("[data-install-file]")!;
   const upgradeFile = root.querySelector<HTMLInputElement>("[data-upgrade-file]")!;
   const upgradeId = root.querySelector<HTMLSelectElement>("[data-upgrade-id]")!;
+  const storeProviderNode = root.querySelector<HTMLElement>("[data-store-provider]")!;
+  const storeResultsNode = root.querySelector<HTMLElement>("[data-store-results]")!;
+  const storeDetailNode = root.querySelector<HTMLElement>("[data-store-detail]")!;
+  const storeQuery = root.querySelector<HTMLInputElement>("[data-store-query]")!;
+  const storeStatusNode = root.querySelector<HTMLElement>("[data-store-status]")!;
 
   const setStatus = (message: string, bad = false): void => {
     status.textContent = message;
     status.className = bad ? "mgr-status bad" : "mgr-status";
   };
+
+  const setStoreStatus = (message: string, bad = false): void => {
+    storeStatusNode.textContent = message;
+    storeStatusNode.className = bad ? "mgr-status bad" : "mgr-status";
+  };
+
+  async function loadKeys(): Promise<void> {
+    try {
+      const [keys, dist] = await Promise.all([
+        api(options.request, "/api/engine/keys"),
+        api(options.request, "/api/engine/keys/distribution"),
+      ]);
+      trustedKeys = new Set(
+        (keys.body.keys ?? []).map((key: { fingerprint: string }) => key.fingerprint),
+      );
+      distribution = (dist.body as { fingerprint?: string }).fingerprint ?? "";
+    } catch {
+      // The keyring is optional for the store view; the approval panel reports
+      // the real error when a key is added.
+    }
+  }
+
+  async function findStore(): Promise<void> {
+    const apps = surface?.apps ?? [];
+    const found = apps.find((app) =>
+      (app.exports ?? []).some((entry) =>
+        String(entry).startsWith("anthracite:store/catalog@"),
+      ),
+    );
+    const provider = found?.id ?? null;
+    if (provider === storeProvider) return;
+    storeProvider = provider;
+    storeProviderNode.textContent = storeProvider
+      ? `Provider ${storeProvider} · the install button below uses the engine session.`
+      : "No composed store provider exports anthracite:store/catalog. Compose the Store app to browse a catalogue.";
+    storeResults = [];
+    storeDetail = null;
+    if (storeProvider) await searchStore();
+    else renderStore();
+  }
+
+  async function searchStore(): Promise<void> {
+    if (!storeProvider) return;
+    try {
+      const query = storeQuery.value.trim();
+      const { body } = await api(
+        options.request,
+        `/api/apps/${encodeURIComponent(storeProvider)}/search?query=${encodeURIComponent(query)}&limit=50`,
+      );
+      storeResults = body ?? [];
+      storeDetail = null;
+      renderStore();
+    } catch (error) {
+      setStoreStatus(reason(error), true);
+    }
+  }
+
+  async function showStore(id: string): Promise<void> {
+    if (!storeProvider) return;
+    try {
+      const { body } = await api(
+        options.request,
+        `/api/apps/${encodeURIComponent(storeProvider)}/app?id=${encodeURIComponent(id)}`,
+      );
+      storeDetail = body as StoreDetail;
+      renderStore();
+    } catch (error) {
+      setStoreStatus(reason(error), true);
+    }
+  }
+
+  function renderStore(): void {
+    storeResultsNode.replaceChildren();
+    if (!storeProvider) {
+      storeDetailNode.replaceChildren();
+      return;
+    }
+    if (storeResults.length === 0) {
+      storeResultsNode.append(element("p", "mgr-hint", "No app in the catalogue matches."));
+    } else {
+      for (const app of storeResults) {
+        const row = element("div", "mgr-form");
+        row.dataset.testid = "manager-store-result";
+        row.dataset.appId = app.id;
+        const choose = button("mgr-btn", app.name);
+        choose.addEventListener("click", () => void showStore(app.id));
+        row.append(
+          choose,
+          element("span", "mgr-mono", app.id),
+          element("span", "mgr-hint", app.publisher),
+          badge(app.latest),
+        );
+        storeResultsNode.append(row);
+      }
+    }
+    storeDetailNode.replaceChildren();
+    if (!storeDetail) return;
+    const detail = storeDetail;
+    const head = element("div", "mgr-form");
+    head.append(
+      element("strong", "", detail.name),
+      element("span", "mgr-mono", detail.id),
+      badge(detail.publisher),
+    );
+    const copy = element("p", "mgr-hint", detail.description || detail.summary);
+    storeDetailNode.append(head, copy);
+    for (const version of detail.versions) {
+      const row = element("div", "mgr-form");
+      row.dataset.testid = "manager-store-version";
+      row.dataset.version = version.version;
+      const trusted =
+        version.signer === distribution || trustedKeys.has(version.signer);
+      const install = button(
+        "mgr-btn primary",
+        version.yanked ? "Yanked" : "Install",
+        "Download, verify the digest and install through the engine",
+      );
+      install.dataset.testid = "manager-store-install";
+      install.disabled = version.yanked || !trusted;
+      install.addEventListener("click", () => void installStore(version));
+      row.append(
+        element("span", "mgr-mono", version.version),
+        badge(version.channel),
+        element(
+          "span",
+          "mgr-hint",
+          `${version.size} bytes · ${version.sha256.slice(0, 12)}…`,
+        ),
+      );
+      if (!trusted) {
+        const key = element("input", "mgr-input") as HTMLInputElement;
+        key.placeholder = "signer public key (64 hex)";
+        key.dataset.testid = "manager-store-signer";
+        const add = button("mgr-btn", "Add signer key");
+        add.dataset.testid = "manager-store-signer-add";
+        add.addEventListener("click", async () => {
+          try {
+            await api(options.request, "/api/engine/keys", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                public_key: key.value.trim(),
+                label: "store handoff",
+              }),
+            });
+            await loadKeys();
+            renderStore();
+            setStoreStatus(`Signer added for ${version.version}.`);
+          } catch (error) {
+            setStoreStatus(reason(error), true);
+          }
+        });
+        row.append(key, add);
+      }
+      row.append(install);
+      storeDetailNode.append(row);
+    }
+  }
+
+  async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  async function installStore(version: StoreVersion): Promise<void> {
+    if (!storeProvider) return;
+    try {
+      setStoreStatus(`Downloading ${version.version}…`);
+      const response = await options.request(
+        `/api/apps/${encodeURIComponent(storeProvider)}/download?id=${encodeURIComponent(
+          storeDetail?.id ?? "",
+        )}&version=${encodeURIComponent(version.version)}`,
+        { headers: { accept: "application/octet-stream" } },
+      );
+      if (!response.ok) throw new Error(await response.text());
+      const bytes = await response.arrayBuffer();
+      if (bytes.byteLength !== version.size) {
+        throw new Error(
+          `the bundle is ${bytes.byteLength} bytes; the catalogue says ${version.size}`,
+        );
+      }
+      const digest = await sha256Hex(bytes);
+      if (digest !== version.sha256) {
+        throw new Error("the bundle digest does not match the catalogue");
+      }
+      setStoreStatus("Installing through the engine…");
+      const installed = await api(options.request, "/api/engine/apps", {
+        method: "POST",
+        headers: { "content-type": "application/zip" },
+        body: bytes,
+      });
+      const app = installed.body as AppView;
+      await refresh(true);
+      pendingApprove = app.id;
+      approval = { status: "loading" };
+      renderApps();
+      void loadApproval(app.id);
+      approveRoot.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      setStoreStatus(
+        `Installed ${app.id} ${app.version}; review the risk and approve below.`,
+      );
+    } catch (error) {
+      setStoreStatus(reason(error), true);
+    }
+  }
 
   const ackHeaders = (): HeadersInit =>
     ack.checked ? { "x-anth-acknowledge": "dependents" } : {};
@@ -249,11 +526,14 @@ export function mountManager(
       problems = (list.body as AppList).problems ?? [];
       const view = current.body as CompositionView;
       composition = view.composition;
+      surface = view.surface ?? null;
       etag = current.response.headers.get("etag") ?? "";
       if (!silent) setStatus(`${apps.length} installed app(s)`);
       renderApps();
       renderComposition();
       void loadAudit();
+      void loadKeys();
+      void findStore();
     } catch (error) {
       if (!disposed) setStatus(reason(error), true);
     }
@@ -490,6 +770,7 @@ export function mountManager(
     }
     approveRoot.append(risks);
     const confirm = button("mgr-btn primary", "Approve");
+    confirm.dataset.testid = "manager-approve";
     confirm.addEventListener("click", () => {
       const selected = chosen
         .filter((input) => input.checked)
@@ -731,6 +1012,39 @@ export function mountManager(
   }
 
   root.querySelector("[data-refresh]")!.addEventListener("click", () => void refresh());
+  root.querySelector("[data-store-search]")!.addEventListener("click", () => void searchStore());
+  root.querySelector("[data-store-catalogs]")!.addEventListener("click", async () => {
+    if (!storeProvider) return;
+    setStoreStatus("Refreshing catalogues…");
+    try {
+      const sources = await api(
+        options.request,
+        `/api/apps/${encodeURIComponent(storeProvider)}/sources`,
+      );
+      let failures = 0;
+      for (const source of sources.body ?? []) {
+        try {
+          await options.request(
+            `/api/apps/${encodeURIComponent(storeProvider)}/sources/refresh`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ source: source.id }),
+            },
+          );
+        } catch {
+          failures += 1;
+        }
+      }
+      await searchStore();
+      setStoreStatus(failures ? `${failures} source(s) failed.` : "Catalogues refreshed.", failures > 0);
+    } catch (error) {
+      setStoreStatus(reason(error), true);
+    }
+  });
+  storeQuery.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") void searchStore();
+  });
   root.querySelector("[data-install]")!.addEventListener("click", () => {
     const file = installFile.files?.[0];
     if (!file) {
