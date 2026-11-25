@@ -7,7 +7,7 @@ description = "The native service side of the engine's private WIT-RPC protocol"
 
 [dependencies]
 anth-contract = { path = "../../../engine/contract" }
-base64 = "0.22"
+base64 = "0.23"
 futures-core = "0.3"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
