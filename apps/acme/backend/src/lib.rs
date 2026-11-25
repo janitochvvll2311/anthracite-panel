@@ -357,13 +357,10 @@ impl Service {
     fn renew(&self, certificate: &str) -> Result<Value, Error> {
         if self.core.orders.list().iter().any(|order| {
             order.renew_of.as_deref() == Some(certificate)
-                && matches!(
-                    order.status,
-                    Status::Pending | Status::Ready | Status::Processing
-                )
+                && !matches!(order.status, Status::Invalid | Status::Revoked)
         }) {
             return Err(Error::conflict(format!(
-                "a renewal of `{certificate}` is already in progress"
+                "`{certificate}` already has a renewal; only a failed or revoked renewal can be retried"
             )));
         }
         let mapping = self

@@ -5,6 +5,7 @@
 //! `http://<name>/.well-known/acme-challenge/<token>` before telling the CA it
 //! is ready. DNS-01 talks to a manual, RFC 2136 or webhook solver.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -126,6 +127,11 @@ pub fn write_http_token(
         file.sync_all()
             .map_err(|error| Error::unavailable(format!("syncing {}: {error}", temp.display())))?;
     }
+    // The service runs with umask 077, which masks the `mode` above down to
+    // 0600. The proxy is another uid and needs the group bit, so chmod after
+    // writing instead of trusting the creation mode.
+    std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o640))
+        .map_err(|error| Error::unavailable(format!("securing {}: {error}", temp.display())))?;
     std::fs::rename(&temp, &path)
         .map_err(|error| Error::unavailable(format!("publishing {}: {error}", path.display())))?;
     Ok(path)
@@ -437,6 +443,40 @@ mod tests {
             &std::fs::metadata(&path).expect("meta").permissions(),
         );
         assert_eq!(mode & 0o777, 0o640);
+        remove_http_token(&path);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_token_keeps_its_group_bit_under_the_service_umask() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Mutex;
+
+        static UMASK: Mutex<()> = Mutex::new(());
+        struct Restore(libc::mode_t);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                // SAFETY: the guard serializes this test with itself; restoring
+                // the process umask cannot invalidate memory.
+                unsafe {
+                    libc::umask(self.0);
+                }
+            }
+        }
+
+        let _guard = UMASK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: same as above; the service runs with 077 and this is the
+        // property the proxy depends on.
+        let previous = unsafe { libc::umask(0o077) };
+        let _restore = Restore(previous);
+        let root = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join("acme-token-umask");
+        let path = write_http_token(&root, "group-token", "value").expect("token");
+        assert_eq!(
+            std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777,
+            0o640
+        );
         remove_http_token(&path);
         let _ = std::fs::remove_dir_all(&root);
     }

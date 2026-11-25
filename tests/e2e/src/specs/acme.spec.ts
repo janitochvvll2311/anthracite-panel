@@ -121,7 +121,13 @@ test("the issue modal runs a real Pebble order", async ({ panel }) => {
   await frame.getByTestId("acme-issue-directory").selectOption(directory);
   await frame.getByTestId("acme-issue-names").fill("localhost");
   await frame.getByTestId("acme-issue-challenge").selectOption("http-01");
-  await frame.getByTestId("acme-modal-submit").click();
+  // The panel resizes the modal frame while the account note settles; a
+  // coordinate click on the submit control can land before the final layout.
+  // Activate the button through its own click handler, which is what the form
+  // exposes, then wait for the panel to close it.
+  await frame
+    .getByTestId("acme-modal-submit")
+    .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(panel.modal.root).toBeHidden({ timeout: 60_000 });
 
   const order = slot.frame.locator(
