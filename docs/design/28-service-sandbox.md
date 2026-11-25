@@ -102,7 +102,9 @@ supervisor cannot fix a refusal by trying again.
   (`/etc/resolv.conf`, `/etc/hosts`, `/etc/nsswitch.conf`, `/etc/host.conf`,
   `/etc/services`). Name resolution is part of the network contract; without
   those files a service that resolves a host blocks until its caller times out.
-  A kernel without Landlock refuses the launch.
+  A root that is a file (the container runtime socket) keeps only the file
+  rights; Landlock rejects directory rights on a non-directory. A kernel
+  without Landlock refuses the launch.
 - When the engine runs as root, each service gets a **per-service uid** derived
   from its app id; `{data}` and its socket directory are `0700` and owned by that
   uid, `{shared}` is `0770` with the engine gid, and the state root is `0711`

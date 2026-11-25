@@ -105,6 +105,12 @@ pub const READ: u64 =
     LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR;
 /// A file rule cannot carry directory rights: Landlock answers EINVAL.
 pub const READ_FILE: u64 = LANDLOCK_ACCESS_FS_READ_FILE;
+/// The rights that are valid on a non-directory: execute, write, read and
+/// truncate (the last one only when the ABI handles it).
+const FILE_ACCESS: u64 = LANDLOCK_ACCESS_FS_EXECUTE
+    | LANDLOCK_ACCESS_FS_WRITE_FILE
+    | LANDLOCK_ACCESS_FS_READ_FILE
+    | LANDLOCK_ACCESS_FS_TRUNCATE;
 
 const LANDLOCK_ACCESS_FS_EXECUTE: u64 = 1 << 0;
 const LANDLOCK_ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
@@ -257,8 +263,21 @@ fn add_rule(ruleset: i32, rule: &Rule, handled: u64) -> Result<(), io::Error> {
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
+    // A runtime socket or a file root is not a directory: Landlock answers
+    // EINVAL for directory rights on it. Keep only the file rights.
+    let metadata = std::fs::metadata(&rule.path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("stat {}: {error}", rule.path.display()),
+        )
+    })?;
+    let access = if metadata.is_dir() {
+        rule.access
+    } else {
+        rule.access & FILE_ACCESS
+    };
     let attr = PathBeneathAttr {
-        allowed_access: rule.access & handled,
+        allowed_access: access & handled,
         parent_fd: fd,
     };
     // SAFETY: the packed attribute matches the kernel ABI.
@@ -503,6 +522,26 @@ pub fn implicit_rules(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_root_uses_only_file_rights() {
+        if abi().is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("sandbox-file-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let socket = dir.join("runtime.sock");
+        std::fs::write(&socket, b"file").expect("file");
+        let rules = vec![Rule {
+            path: socket,
+            access: READ | LANDLOCK_ACCESS_FS_WRITE_FILE,
+        }];
+        build(&rules).expect("a file root is a valid Landlock rule");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn resolver_files_are_part_of_the_implicit_view() {

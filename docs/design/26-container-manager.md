@@ -173,7 +173,17 @@ inside the app, not a panel modal.
 - **Exec is a shell.** It runs inside the container, with the container's
   privileges. The container must not be privileged; v0.7.0 never creates one.
 
-## 8. Acceptance
+## 8. Implementation notes
+
+The runtime socket is a file root (decision 0009): the Landlock rule keeps only
+file rights for a non-directory, so the service can connect without exposing the
+host. The WIT create record cannot express a bind mount, privileged mode or a
+host namespace; unknown fields are rejected, and `network = "host"` or
+`container:*` is refused explicitly. Exec is a service-owned session over the
+hijacked Engine stream (decision 0010). The always-on test is a fixture Engine
+API; Docker and rootless Podman are manual QA rows.
+
+## 9. Acceptance
 
 - The inventory works against Docker and rootless Podman.
 - Start/stop/restart/remove work; a remove with dependent volumes asks first.

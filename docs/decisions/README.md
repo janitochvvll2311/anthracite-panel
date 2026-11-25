@@ -12,3 +12,5 @@ Decisiones registradas durante la implementación de features.
 | [0006](0006-where-does-an-issued-certificate-key-live-when-the-certificate-s.md) | 2026-11-25 | Where does an issued certificate key live when the certificate store is absent? |
 | [0007](0007-how-does-the-panel-know-which-ca-directories-are-staging.md) | 2026-11-25 | How does the panel know which CA directories are staging? |
 | [0008](0008-how-is-the-acme-gate-automated-when-ci-cannot-download-or-run-pe.md) | 2026-11-25 | How is the ACME gate automated when CI cannot download or run Pebble? |
+| [0009](0009-how-does-the-container-manager-hold-the-runtime-socket.md) | 2026-11-25 | How does the container manager hold the runtime socket? |
+| [0010](0010-how-do-exec-sessions-work-and-how-is-the-runtime-tested-without-.md) | 2026-11-25 | How do exec sessions work and how is the runtime tested without Docker? |
