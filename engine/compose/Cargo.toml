@@ -11,7 +11,7 @@ base64 = "0.22"
 ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"] }
 humantime = "2"
 libc = "0.2"
-sha2 = "0.10"
+sha2 = "0.11"
 serde_json = { workspace = true }
 wit-parser = "0.263"
 zip = { version = "2.6", default-features = false, features = ["deflate"] }
