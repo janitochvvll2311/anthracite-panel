@@ -39,7 +39,11 @@ pub fn create(id: &str, lang: &str, dir: Option<&Path>) -> Result<PathBuf> {
         "src/lib.rs",
         &lib_rs(&prefix.replace('-', "_"), &short.replace('-', "_")),
     )?;
-    write(&target, ".gitignore", "/target\n/dist\n/wasm\n")?;
+    write(
+        &target,
+        ".gitignore",
+        "/target\n/dist\n/wasm\n*.key\nnode_modules/\n",
+    )?;
     write(&target, "README.md", &readme(id, short, &name, lang))?;
 
     if lang == "bun" {
@@ -50,7 +54,7 @@ pub fn create(id: &str, lang: &str, dir: Option<&Path>) -> Result<PathBuf> {
 
     println!("created {} ({})", target.display(), lang);
     println!("  cd {}", target.display());
-    println!("  anth app build");
+    println!("  cargo anth app build");
     Ok(target)
 }
 
@@ -224,7 +228,7 @@ export function mount(
 
 fn readme(id: &str, short: &str, name: &str, lang: &str) -> String {
     let ui = if lang == "bun" {
-        "\nThe UI lives in `src/main.ts`; `anth app build` runs `bun build` into\n`web/app.js` and the manifest pins its hash.\n"
+        "\nThe UI lives in `src/main.ts`; `cargo anth app build` runs `bun build` into\n`web/app.js` and the manifest pins its hash.\n"
     } else {
         ""
     };

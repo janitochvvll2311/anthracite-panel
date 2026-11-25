@@ -7,19 +7,24 @@ repository.
 cargo install cargo-anth
 cargo anth app new org.example.notes --lang rust
 cd notes
+anth-sign keygen --out dev.key
 cargo anth app build
-cargo anth app package
-cargo anth app sign --key dev.key
-cargo anth app verify --public-key <public-key>
+cargo anth app check
+cargo anth app package --key dev.key
+cargo anth app verify --public-key "$(anth-sign public-key --key dev.key | awk '/^public_key/ {print $2}')"
 ```
+
+`anth-sign` and `anth-conformance` ship in the GitHub Release `bin/`; put that
+directory on `PATH` (or build `anth-signer`/`anth-conformance` from the
+workspace). `cargo install cargo-anth` provides `cargo anth`, not those tools.
 
 The same commands are available from the `anth` binary shipped with the
 Anthracite release:
 
 ```sh
 anth app new org.example.notes --lang bun
-anth app build
-anth app package
+cargo anth app build
+cargo anth app package
 ```
 
 `cargo anth` uses cargo's `cargo-<subcommand>` discovery: it is the same
