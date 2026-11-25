@@ -1,67 +1,59 @@
 version: 2
 updates:
+  # Routine Rust bumps arrive as one grouped pull request per run. Major bumps
+  # are deliberate upgrades: open them by hand when the migration is planned.
+  # Security updates ignore `update-types`, so advisories still get a PR.
   - package-ecosystem: cargo
-    directory: "/engine"
+    directories:
+      - "/engine"
+      - "/sdk/rust"
+      - "/panel/backend"
+      - "/apps"
+      - "/demo/emulator"
+      - "/demo/sessions"
+      - "/tests/acid/app"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-
-  - package-ecosystem: cargo
-    directory: "/sdk/rust"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: cargo
-    directory: "/panel/backend"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: cargo
-    directory: "/apps"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: cargo
-    directory: "/demo/emulator"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: cargo
-    directory: "/demo/sessions"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: cargo
-    directory: "/tests/acid/app"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: bun
-    directory: "/panel/frontend"
+    directories:
+      - "/panel/frontend"
+      - "/sdk/ts/client"
+      - "/sdk/ts/panel"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-
-  - package-ecosystem: bun
-    directory: "/sdk/ts/client"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: bun
-    directory: "/sdk/ts/panel"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+    groups:
+      bun-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
