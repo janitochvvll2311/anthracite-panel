@@ -23,8 +23,9 @@ Anthracite release:
 
 ```sh
 anth app new org.example.notes --lang bun
-cargo anth app build
-cargo anth app package
+cd notes
+anth app build
+anth app package
 ```
 
 `cargo anth` uses cargo's `cargo-<subcommand>` discovery: it is the same
