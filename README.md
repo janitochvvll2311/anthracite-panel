@@ -22,12 +22,14 @@ v3 manifest, streams and quotas, the `system` tier with a compiled distribution
 key and a signing ceremony, the sandbox baseline and the external-bundle acid
 test.
 
-The **v0.8.0** line is the third-party SDK: one Rust CLI with `cargo anth` and
-`anth`, publishable crates (`anth-error`, `anth-guest`, `anth-service`, `anth-client`,
-`anth-bundle`, `cargo-anth`) and npm packages under `@anth-panel`, plus
-standalone templates. The contract is
-[`docs/design/31-sdk-distribution.md`](docs/design/31-sdk-distribution.md); the
-packages are not published yet.
+The **v0.8.0** release is the third-party SDK: one Rust CLI with `cargo anth`
+and `anth`, publishable crates (`anth-error`, `anth-guest`, `anth-service`,
+`anth-client`, `anth-bundle`, `cargo-anth`) and npm packages under
+`@anth-panel`, plus standalone templates. The contract is
+[`docs/design/31-sdk-distribution.md`](docs/design/31-sdk-distribution.md); all
+six crates and all six `@anth-panel` packages are published at `0.8.0`, and the
+close report is
+[`docs/features/app-sdk/report.md`](docs/features/app-sdk/report.md).
 
 The design of record is [`DESIGN.md`](DESIGN.md); the official manual is
 [`docs/guide/`](docs/guide/README.md).

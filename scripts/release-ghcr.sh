@@ -24,7 +24,7 @@ while [ $# -gt 0 ]; do
         --version) version=${2:?`--version` needs a value}; shift 2 ;;
         --owner) owner=${2:?`--owner` needs a value}; shift 2 ;;
         --public) make_public=1; shift ;;
-        -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
+        -h | --help) sed -n '2,13p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -55,16 +55,20 @@ push demo anthracite-panel demo
 push demo-sessions anthracite-demo main
 
 if [ "$make_public" = 1 ]; then
-    command -v gh >/dev/null 2>&1 || { echo "gh is needed for --public" >&2; exit 2; }
-    for package in anthracite-panel anthracite-demo; do
-        if gh api -X PATCH "/user/packages/container/$package" \
-            -f visibility=public >/dev/null 2>&1; then
-            echo "ghcr: $package is public"
-        else
-            echo "ghcr: could not change $package visibility from the API" >&2
-            echo "      set it to Public at https://github.com/users/$owner/packages/container/$package/settings" >&2
-        fi
-    done
+    if command -v gh >/dev/null 2>&1; then
+        for package in anthracite-panel anthracite-demo; do
+            if gh api -X PATCH "/user/packages/container/$package" \
+                -f visibility=public >/dev/null 2>&1; then
+                echo "ghcr: $package is public"
+            else
+                echo "ghcr: could not change $package visibility from the API" >&2
+                echo "      set it to Public at https://github.com/users/$owner/packages/container/$package/settings" >&2
+            fi
+        done
+    else
+        echo "ghcr: gh is not on PATH; the images are pushed but private" >&2
+        echo "      set each package to Public at https://github.com/users/$owner/packages/container/<package>/settings" >&2
+    fi
 fi
 
 echo "ghcr: pushed $version from $images"
