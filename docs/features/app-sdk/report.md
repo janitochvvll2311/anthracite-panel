@@ -3,9 +3,10 @@
 ## Summary
 
 `v0.8.0` turns the public repository into an installable SDK for third-party
-apps. Six phases ran as one PR each into `v0.8.0`, plus a post-release state
-phase, and the final tag `v0.8.0` is cut at `94f08d8`. The engine and the five
-edge apps are unchanged; the line adds the authoring path:
+apps. Seven phases ran as one PR each into `v0.8.0`, and the final tag
+`v0.8.0` is cut at `94f08d8`; the post-release state merged as `d2f1375`.
+The engine and the five edge apps are unchanged; the line adds the authoring
+path:
 
 - `cargo anth` / `anth` for Rust, from the `cargo-anth` crate.
 - `bunx @anth-panel/cli` and `@anth-panel/create-app` for Bun.
@@ -23,7 +24,7 @@ The contract is [§31](../../design/31-sdk-distribution.md) and ADRs 0013–0018
 | 4 — npm packages and Bun plugin | [#232](https://github.com/janitochvvll2311/anthracite-panel/pull/232) | merged | squash |
 | 5 — Templates, examples and documentation | [#233](https://github.com/janitochvvll2311/anthracite-panel/pull/233) | merged | squash |
 | 6 — Publish and release | [#234](https://github.com/janitochvvll2311/anthracite-panel/pull/234) | merged | squash |
-| 7 — Post-release state | [#235](https://github.com/janitochvvll2311/anthracite-panel/pull/235) | in review | squash |
+| 7 — Post-release state | [#235](https://github.com/janitochvvll2311/anthracite-panel/pull/235) | merged | squash |
 
 ## Delivered
 
