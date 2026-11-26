@@ -35,6 +35,7 @@ fn is_dev() -> bool {
                     | "sign"
                     | "verify"
                     | "check"
+                    | "doctor"
                     | "help"
                     | "--help"
                     | "-h"

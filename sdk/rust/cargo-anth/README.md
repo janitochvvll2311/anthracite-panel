@@ -42,6 +42,7 @@ standalone and never references this repository.
 | `app sign [--project <dir>] [--key <path>]` | sign an existing bundle |
 | `app verify [--project <dir>] [--public-key <hex>]` | run `anth-conformance` |
 | `app check [--project <dir>]` | package and run the unsigned conformance check |
+| `app doctor` | check cargo, rustc, the wasm target, wasm-tools and the optional signing tools |
 
 `anth.toml` at the project root drives all of them; `--project` may point at the
 directory or the `anth.toml` itself.

@@ -1,0 +1,11 @@
+# The Anthracite project file. `anth app build` reads it.
+[app]
+id = "org.example.sdk-bun"
+lang = "bun"
+
+[build]
+target = "wasm32-unknown-unknown"
+
+[wit]
+catalog = "0.8"
+world = "app"

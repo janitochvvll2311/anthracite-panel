@@ -35,6 +35,7 @@ run() {
     name=$2
     project=$dir/$name
     echo "sdk: $lang project"
+    cargo anth app doctor
     "$bin/anth" app new "org.example.$name" --dir "$project" --lang "$lang"
     (
         cd "$project"

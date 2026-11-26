@@ -227,6 +227,8 @@ verify — fails loudly. The same kit is what the release and CI run.
 
 ## A standalone project
 
+See [App SDK](sdk.md) for install, `anth.toml`, templates and troubleshooting.
+
 The `v0.8.0` CLI creates a project outside this repository. The GitHub Release
 `bin/` carries `anth-sign` and `anth-conformance`; put that directory on `PATH`
 (or build `anth-signer`/`anth-conformance` from the workspace).

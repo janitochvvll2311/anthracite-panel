@@ -1,6 +1,7 @@
 //! `anth` / `cargo-anth`: create, build, package, sign and verify apps.
 
 mod config;
+mod doctor;
 mod project;
 mod template;
 
@@ -79,6 +80,7 @@ fn app(args: Vec<String>) -> Result<()> {
             project::check(&project)?;
             Ok(())
         }
+        "doctor" => doctor::run(),
         "help" | "--help" | "-h" => {
             help();
             Ok(())
@@ -151,6 +153,7 @@ Usage:
   anth app sign [--project <dir>] [--key <path>]
   anth app verify [--project <dir>] [--public-key <hex>]
   anth app check [--project <dir>]
+  anth app doctor
 
 The same commands are available as `cargo anth ...`.
 

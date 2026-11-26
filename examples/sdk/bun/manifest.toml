@@ -1,0 +1,31 @@
+manifest_version = 2
+
+[app]
+id = "org.example.sdk-bun"
+namespace = "example:sdk-bun"
+name = "Sdk Bun"
+version = "0.1.0"
+summary = "A new Anthracite app."
+license = "Apache-2.0"
+icon = "box"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[export]]
+interface = "example:sdk-bun/api@0.1.0"
+
+[[route]]
+method = "GET"
+path = "/ping"
+call = "example:sdk-bun/api@0.1.0#ping"
+
+[[slot]]
+id = "panel.view"
+label = "Sdk Bun"
+icon = "box"
+order = 100
+tag = "sdk-bun"
+module = "web/app.js"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
