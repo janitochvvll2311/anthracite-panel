@@ -73,6 +73,10 @@ fn target_installed(rustc: &str, target: &str) -> bool {
             }
         }
     }
+    target_libdir_has_std(rustc, target)
+}
+
+fn target_libdir_has_std(rustc: &str, target: &str) -> bool {
     let Ok(output) = Command::new(rustc)
         .args(["--print", "target-libdir", "--target", target])
         .output()
@@ -90,4 +94,27 @@ fn target_installed(rustc: &str, target: &str) -> bool {
             name.starts_with("libstd-") && name.ends_with(".rlib")
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn a_target_libdir_without_std_is_not_installed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("rustc");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nif [ \"$1\" = \"--print\" ]; then echo /does/not/exist; exit 0; fi\nexit 0\n",
+        )
+        .expect("write");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        assert!(!target_libdir_has_std(
+            fake.to_str().expect("utf8"),
+            "wasm32-unknown-unknown"
+        ));
+    }
 }

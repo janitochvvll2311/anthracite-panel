@@ -22,11 +22,12 @@ put that directory on `PATH` or copy the three binaries next to your tools.
 Bun:
 
 ```sh
-bun add @anth-panel/panel @anth-panel/client
-# choose one:
 bunx @anth-panel/cli app new org.example.notes --lang bun
-# or
+# o, equivalente:
 bunx @anth-panel/create-app org.example.notes
+
+cd notes
+bun add @anth-panel/panel @anth-panel/client
 ```
 
 `@anth-panel/cli` runs the `anth` binary from the release (or `ANTH_BIN`), with
