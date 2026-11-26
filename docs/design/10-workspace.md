@@ -10,7 +10,9 @@ discouraged.
 engine/                    Rust workspace: the platform
   Cargo.toml
   wit/                     anth:env, anth:store, anth:error
-  contract/                manifest, composition, grants, errors (no I/O)
+  contract/                manifest, composition, grants (no I/O)
+  error/                   the error kind and envelope (no I/O)
+  bundle/                  canonical signed message, hashes, zip unpack, Ed25519
   runtime/                 the only crate that names wasmtime; world checks
   broker/                  host interface dispatch, quotas, denials
   compose/                 registry, grant store, resolver, surface projection

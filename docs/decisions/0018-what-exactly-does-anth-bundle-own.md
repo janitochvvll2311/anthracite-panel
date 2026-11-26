@@ -10,7 +10,7 @@ What exactly does anth-bundle own?
 
 ## Decision
 
-anth-bundle owns the canonical signed message, the WIT/file hashes, the confined zip unpack and the Ed25519 verification. It depends only on anth-error. Manifest parsing and WIT semantic validation stay in the engine contract/compose, which depend on anth-bundle; tools that need them call anth-conformance.
+anth-bundle owns the canonical signed message, the WIT/file hashes, the confined zip unpack and the Ed25519 verification. Among Anthracite crates it depends only on anth-error; its external dependencies are base64, ed25519-dalek, sha2 and zip. Manifest parsing and WIT semantic validation stay in the engine contract/compose, which depend on anth-bundle; tools that need them call anth-conformance.
 
 ## Rationale
 

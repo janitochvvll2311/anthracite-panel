@@ -1,8 +1,8 @@
 //! Ed25519 over the canonical bundle message (D-Signature-Algorithm).
 //!
-//! This lives in the engine, not in the contract: the CLI links the contract and
-//! must not carry curve25519 for a signature it never checks. The registry is
-//! the only caller; the formats are pinned here.
+//! This lives in anth-bundle, not in the contract: the contract enables only
+//! `message`, so a client that never verifies does not link curve25519. The
+//! registry, signer and tools share this one format.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;

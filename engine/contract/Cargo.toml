@@ -6,7 +6,7 @@ license.workspace = true
 description = "The shared vocabulary of the Anthracite platform: identifiers, manifests and errors"
 
 [dependencies]
-anth-bundle = { path = "../bundle" }
+anth-bundle = { path = "../bundle", default-features = false, features = ["message"] }
 anth-error = { path = "../error" }
 serde = { workspace = true }
 serde_json = { workspace = true }

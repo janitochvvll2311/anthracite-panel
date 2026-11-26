@@ -9,9 +9,18 @@ readme = "README.md"
 keywords = ["anthracite", "wasm", "bundle", "signature"]
 categories = ["development-tools"]
 
+[features]
+default = ["message", "signature", "unpack"]
+# The canonical signed message and the WIT/file hash framing. No curve or zip.
+message = []
+# Ed25519 verification of a signature.
+signature = ["dep:base64", "dep:ed25519-dalek", "dep:sha2"]
+# A confined zip unpack with caps, used by the engine and the conformance kit.
+unpack = ["dep:zip"]
+
 [dependencies]
 anth-error = { version = "0.8.0", path = "../error" }
-base64 = "0.22"
-ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"] }
-sha2 = "0.10"
-zip = { version = "2.6", default-features = false, features = ["deflate"] }
+base64 = { version = "0.22", optional = true }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"], optional = true }
+sha2 = { version = "0.10", optional = true }
+zip = { version = "2.6", default-features = false, features = ["deflate"], optional = true }
