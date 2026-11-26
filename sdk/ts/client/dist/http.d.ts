@@ -1,1 +1,1 @@
-export * from "./anthracite_hello_greeting_routes";
+export * from "./anthracite_hello_greeting_routes.js";

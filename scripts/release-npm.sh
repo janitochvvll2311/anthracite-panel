@@ -44,3 +44,6 @@ for package in $packages; do
     )
 done
 echo "npm: $mode complete: $packages"
+if [ "$mode" = check ]; then
+    git diff --exit-code -- sdk/ts/panel/dist sdk/ts/client/dist sdk/ts/bun-plugin/dist
+fi

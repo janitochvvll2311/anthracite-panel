@@ -9,6 +9,8 @@ bundler pipeline.
 preload = ["@anth-panel/bun-plugin"]
 ```
 
+The app must also install `@anth-panel/client`; the plugin re-exports it.
+
 Or register it explicitly:
 
 ```ts

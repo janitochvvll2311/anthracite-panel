@@ -22,7 +22,7 @@ export function anthPlugin(): { name: string; setup(build: AnthBuild): void } {
         namespace: "anthracite",
       }));
       build.onLoad({ filter: /.*/, namespace: "anthracite" }, () => ({
-        contents: 'export const virtual = true; export const generated = "anth:client";',
+        contents: 'export * from "@anth-panel/client";',
         loader: "js",
       }));
     },

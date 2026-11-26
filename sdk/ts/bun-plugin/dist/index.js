@@ -9,7 +9,7 @@ function anthPlugin() {
         namespace: "anthracite"
       }));
       build.onLoad({ filter: /.*/, namespace: "anthracite" }, () => ({
-        contents: 'export const virtual = true; export const generated = "anth:client";',
+        contents: 'export * from "@anth-panel/client";',
         loader: "js"
       }));
     }

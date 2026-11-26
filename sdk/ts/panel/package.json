@@ -18,7 +18,7 @@
   },
   "files": ["dist", "README.md"],
   "scripts": {
-    "build": "bun build src/index.ts --outfile dist/index.js --format esm --target browser && tsc -p tsconfig.build.json && cp src/app-frame.html dist/",
+    "build": "bun build src/index.ts --outfile dist/index.js --format esm --target browser && tsc -p tsconfig.build.json && cp src/app-frame.html dist/ && bun ../../../scripts/fix-dts.ts dist",
     "test": "bun test src",
     "typecheck": "tsc --noEmit"
   },

@@ -1,5 +1,5 @@
-import type { FrameContext } from "./iframe";
-import type { Contribution } from "./model";
+import type { FrameContext } from "./iframe.js";
+import type { Contribution } from "./model.js";
 export declare function byId<T extends HTMLElement>(id: string): T;
 export declare function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K];
 export declare function button(className: string, text: string, title?: string): HTMLButtonElement;

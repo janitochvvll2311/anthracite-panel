@@ -358,7 +358,7 @@ export function generate(appDir: string, catalog: string): Generation {
       files: ["dist", "README.md"],
       scripts: {
         build:
-          "bun build src/index.ts --outfile dist/index.js --format esm --target browser && tsc -p tsconfig.build.json",
+          "bun build src/index.ts --outfile dist/index.js --format esm --target browser && tsc -p tsconfig.build.json && bun ../../../scripts/fix-dts.ts dist",
         test: "bun test",
         typecheck: "tsc --noEmit",
       },

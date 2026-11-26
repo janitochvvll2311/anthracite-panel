@@ -1,9 +1,9 @@
-export * from "./iframe";
-export * from "./dom";
-export * from "./stream";
-export * from "./testids";
-import type { App, Contribution } from "./model";
-export type { App, Contribution, FabAction, Slot } from "./model";
+export * from "./iframe.js";
+export * from "./dom.js";
+export * from "./stream.js";
+export * from "./testids.js";
+import type { App, Contribution } from "./model.js";
+export type { App, Contribution, FabAction, Slot } from "./model.js";
 export declare const VIEW = "panel.view";
 export declare const ACTION = "panel.action";
 export declare const SETTINGS = "panel.settings";

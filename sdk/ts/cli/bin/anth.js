@@ -3,11 +3,15 @@
 // PATH; `ANTH_BIN` overrides it and `cargo anth` is the fallback for a Rust
 // toolchain without the release binary.
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const candidates = [];
 if (process.env.ANTH_BIN) candidates.push([process.env.ANTH_BIN, args]);
-candidates.push(["anth", args], ["cargo", ["anth", ...args]]);
+const self = realpathSync(import.meta.path);
+const found = Bun.which("anth");
+if (found && realpathSync(found) !== self) candidates.push(["anth", args]);
+candidates.push(["cargo", ["anth", ...args]]);
 
 let last;
 for (const [command, argv] of candidates) {
