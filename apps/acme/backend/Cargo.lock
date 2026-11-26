@@ -36,11 +36,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-bundle"
+version = "0.8.0"
+dependencies = [
+ "anth-error",
+]
+
+[[package]]
 name = "anth-contract"
 version = "0.8.0"
 dependencies = [
+ "anth-bundle",
+ "anth-error",
  "humantime",
  "semver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "anth-error"
+version = "0.8.0"
+dependencies = [
  "serde",
  "serde_json",
 ]
@@ -49,7 +66,7 @@ dependencies = [
 name = "anth-service"
 version = "0.8.0"
 dependencies = [
- "anth-contract",
+ "anth-error",
  "base64",
  "futures-core",
  "futures-util",

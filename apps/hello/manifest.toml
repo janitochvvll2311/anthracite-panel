@@ -10,7 +10,7 @@ icon = "hello"
 
 [wasm]
 path = "wasm/app.wasm"
-sha256 = "dea0206e4f454737e4be182b8f2d544f22aa84cab2229e5e8aa9da6d35851493"
+sha256 = "c7cd38c12675aba7b46442af593704c2f63babe7e82015873bcbbed19de9bcc2"
 
 [[export]]
 interface = "anthracite:hello/greeting@1.0.0"
