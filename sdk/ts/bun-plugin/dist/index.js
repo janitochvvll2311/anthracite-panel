@@ -16,10 +16,6 @@ function anthPlugin() {
   };
 }
 var src_default = anthPlugin;
-var runtime = globalThis.Bun;
-if (runtime?.plugin) {
-  runtime.plugin(anthPlugin());
-}
 export {
   anthPlugin,
   src_default as default

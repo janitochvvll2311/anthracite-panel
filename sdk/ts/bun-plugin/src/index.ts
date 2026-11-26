@@ -30,9 +30,3 @@ export function anthPlugin(): { name: string; setup(build: AnthBuild): void } {
 }
 
 export default anthPlugin;
-
-// `bunfig.toml` preload = ["@anth-panel/bun-plugin"] registers the plugin.
-const runtime = (globalThis as { Bun?: { plugin?: (plugin: unknown) => void } }).Bun;
-if (runtime?.plugin) {
-  runtime.plugin(anthPlugin());
-}

@@ -1,22 +1,24 @@
 # @anth-panel/bun-plugin
 
 A Bun plugin for the Anthracite developer workflow. It resolves the virtual
-`anth:client` module generated app code imports in `Bun.build` and the Bun
-bundler pipeline.
+`anth:client` module generated app code imports and re-exports the real
+`@anth-panel/client` package.
 
-```toml
-# bunfig.toml: register the plugin for builds
-preload = ["@anth-panel/bun-plugin"]
+```sh
+bun add @anth-panel/bun-plugin @anth-panel/client
 ```
-
-The app must also install `@anth-panel/client`; the plugin re-exports it.
-
-Or register it explicitly:
 
 ```ts
 import { anthPlugin } from "@anth-panel/bun-plugin";
-Bun.plugin(anthPlugin());
+
+const result = await Bun.build({
+  entrypoints: ["./src/main.ts"],
+  plugins: [anthPlugin()],
+});
 ```
 
-The plugin is a build/dev hook, not a `bun anth` subcommand and not a runtime
-module resolver; the CLI remains `bunx @anth-panel/cli`.
+Bun 1.4.4 does not apply a `bunfig.toml` preload plugin to build resolution, so
+the plugin is registered explicitly in the build script (or in a preload that
+runs `Bun.plugin(anthPlugin())` before the build). It is not a `bun anth`
+subcommand and not a runtime module resolver; the CLI remains
+`bunx @anth-panel/cli`.
