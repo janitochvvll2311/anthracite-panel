@@ -37,14 +37,14 @@ dependencies = [
 
 [[package]]
 name = "anth-bundle"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anth-error",
 ]
 
 [[package]]
 name = "anth-contract"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anth-bundle",
  "anth-error",
@@ -56,7 +56,7 @@ dependencies = [
 
 [[package]]
 name = "anth-error"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "anth-service"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anth-error",
  "base64",
