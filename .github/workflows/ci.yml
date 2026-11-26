@@ -82,9 +82,8 @@ jobs:
       - name: Build and verify the committed component
         run: |
           set -eu
-          scripts/build-app.sh apps/hello
-          sha=$(sha256sum apps/hello/wasm/app.wasm | cut -d' ' -f1)
-          grep -q "sha256 = \"$sha\"" apps/hello/manifest.toml
+          scripts/build-app.sh --check apps/hello
+          git diff --exit-code -- apps/hello
 
   panel:
     name: panel

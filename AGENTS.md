@@ -57,7 +57,9 @@ dependency that should not exist becomes unrepresentable instead of discouraged.
 - `engine/` — the platform: `contract`, `runtime`, `compose`, `auth`, `api`,
   `daemon`. Builds `anth-engine`, the headless daemon.
 - `sdk/rust/` — `guest` (wasm apps), `panel` (panels), `client` (generated
-  HTTP/CLI clients), `cli` (the `anth` commands), `signer` (`anth-sign`).
+  HTTP/CLI clients), `cli` (the `anth` commands), `service` (native services),
+  `conformance` and `signer` (the offline tools), `cargo-anth` (the app developer
+  CLI behind `cargo anth` and `anth app ...`).
 - `panel/backend/` — the official panel binary; links the SDK, mounts the engine
   router, wires the CLI and embeds `panel/frontend/dist`.
 - `apps/` — app bundles. Its own workspace; never built for the host.
@@ -84,6 +86,9 @@ scripts/dev.sh
 
 # the external-bundle acid test: build, sign, install, compose, serve, answer
 scripts/acid-test.sh
+
+# the SDK CLI gate: a project in /tmp builds, signs and verifies
+scripts/sdk-cli-test.sh
 
 # browser e2e against a running panel (tests/e2e/README.md)
 (cd tests/e2e && bun install)

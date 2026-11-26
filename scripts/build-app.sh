@@ -2,10 +2,18 @@
 # Build one app bundle's component: compile for wasm32-unknown-unknown, embed the
 # app WIT, and wrap it into a component with wasm-tools (§7.3, §11).
 #
-# Usage: scripts/build-app.sh apps/hello
+# Usage: scripts/build-app.sh [--check] <app-dir>
+#
+# `--check` builds the component and fails if the committed manifest hash does
+# not match; it never rewrites the manifest. The release path updates it.
 set -eu
 
-app=${1:?usage: build-app.sh <app-dir>}
+check=0
+if [ "${1:-}" = "--check" ]; then
+    check=1
+    shift
+fi
+app=${1:?usage: build-app.sh [--check] <app-dir>}
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 case "$app" in
     /*) ;;
@@ -53,5 +61,15 @@ mkdir -p "$(dirname "$app/$wasm_path")"
 "$wasm_tools" component new "$tmp/embedded.wasm" -o "$app/$wasm_path"
 
 sha=$(sha256sum "$app/$wasm_path" | cut -d' ' -f1)
+current=$(awk -F'"' '/^\[wasm\]/{s=1;next} /^\[/{s=0} s && /^sha256[[:space:]]*=/ {print $2; exit}' "$manifest")
+if [ "$check" = 1 ]; then
+    [ "$current" = "$sha" ] || {
+        echo "$manifest is stale: built $sha, manifest has ${current:-nothing}" >&2
+        exit 1
+    }
+else
+    # Keep the manifest honest: the engine refuses a hash that does not match.
+    sed -i "/^\[wasm\]/,/^\[/ s/^sha256 = \".*\"$/sha256 = \"$sha\"/" "$manifest"
+fi
 echo "built $app/$wasm_path"
 echo "manifest sha256 = \"$sha\""

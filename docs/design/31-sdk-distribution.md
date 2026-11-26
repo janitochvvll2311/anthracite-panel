@@ -24,7 +24,7 @@ bunx @anth-panel/cli app new org.example.notes --lang bun
 
 | Artifact | Registry | Audience | Stable API |
 | --- | --- | --- | --- |
-| `cargo-anth` (bins `cargo-anth`, `anth`) | crates.io | app authors using cargo | yes |
+| `cargo-anth` (bin `cargo-anth`; `anth` in the release) | crates.io | app authors using cargo | yes |
 | `anth-guest` | crates.io | wasm apps in Rust | yes |
 | `anth-service` | crates.io | native services in Rust | yes |
 | `anth-client` | crates.io | HTTP/CLI clients in Rust | yes |
@@ -46,6 +46,16 @@ The workspace packages are still named `@anthracite/panel` and
 `@anth-panel/panel` and `@anth-panel/client`; the rename happens in the npm phase,
 before the first publish.
 
+The scoped names are the canonical ones. Do not publish unscoped `anth-*`
+packages at launch: `anth-*` is a textual prefix, not a namespace, so anyone
+could impersonate the family. If demand appears later, an unscoped alias is a
+thin re-export of the scoped package and is documented as an alias; the scoped
+package stays canonical.
+
+crates.io has no scopes and does not reserve prefixes. The `anth-*` crates are
+claimed one by one and owned by `anth-panel`; the convention is documented, not
+enforced by the registry.
+
 ### What stays internal
 
 `anth-api`, `anth-engine`, `anth-runtime`, `anth-compose`, the full
@@ -57,20 +67,14 @@ verification remain the engine's job.
 
 ## 3. One CLI, two entry points
 
-The CLI is a Rust binary. The crate `cargo-anth` installs two binaries with the
-same `main`:
+The CLI is one Rust library shared by the `cargo-anth` binary and the `anth`
+client. `cargo install cargo-anth` provides `cargo anth`; the release and the
+`anth-cli` binary provide `anth` with the same `app ...` commands.
 
-```toml
-[[bin]]
-name = "cargo-anth"
-
-[[bin]]
-name = "anth"
-```
-
-- Cargo discovers `cargo-anth` on `PATH`; `cargo anth app build` runs it with
-  the arguments after `anth`. This is the same mechanism as `cargo clippy` or
-  `cargo nextest`, without making Anthracite a rustup component.
+- Cargo discovers `cargo-anth` on `PATH`; it invokes it as
+  `cargo-anth anth app build`. The binary drops the leading `anth` that cargo
+  adds. This is the same mechanism as `cargo clippy` or `cargo nextest`,
+  without making Anthracite a rustup component.
 - `anth ...` is the direct entry point for scripts, CI and the npm wrapper.
 
 Bun has no subcommand registry. The integration is the Drizzle-shaped one:
