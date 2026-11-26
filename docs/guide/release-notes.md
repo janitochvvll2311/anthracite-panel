@@ -1,5 +1,28 @@
 # Release notes
 
+## 0.8.1 — the Store in base
+
+`v0.8.1` is a distribution update. The engine and the panel binaries are
+unchanged; the release makes the store part of the clean-install path.
+
+- The `base` variant now ships and composes `org.anthracite.store` alongside the
+  eight signed system apps.
+- On a clean install, the store seeds the Anthracite website as its default
+  catalogue source (`https://anth-panel.com/store`). If `{data}/sources.json`
+  exists but has no sources, the default is added; a configured list is never
+  modified.
+- The website catalogue lists the official apps (the eight system apps and
+  `certs`, `acme`, `proxy`, `containers`) plus third-party apps whose publishers
+  registered a version, an external bundle URL, its SHA-256 and the signer key.
+- The store downloads every bundle from the publisher's URL; nothing is uploaded
+  to the website or to the panel.
+- `demo` and `demo-sessions` do not include the store.
+
+Existing installations: running the new `base/run.sh` adds the missing store with
+`compose --add` without removing custom apps. If the store was already installed,
+update its bundle from the manager; the new version seeds the source when the
+list is empty.
+
 ## 0.8.0 — the App SDK
 
 `v0.8.0` turns the public repository into an installable SDK for third-party

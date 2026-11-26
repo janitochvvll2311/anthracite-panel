@@ -4,6 +4,14 @@
 # Usage: apps/store/build.sh [output.anth]
 set -eu
 
+# Release builds of the store know the default catalogue source. Development
+# and test builds leave it unset so they keep their local sources.
+if [ "${ANTHRACITE_RELEASE:-0}" = "1" ]; then
+    : "${ANTHRACITE_STORE_SOURCE_URL:=https://anth-panel.com/store}"
+    : "${ANTHRACITE_STORE_SOURCE_KEY:=df65b29d879a40159919ca688ba0df40407147ff0d2231e6b56f04d3bf385b8d}"
+    export ANTHRACITE_STORE_SOURCE_URL ANTHRACITE_STORE_SOURCE_KEY
+fi
+
 app=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 root=$(CDPATH= cd -- "$app/../.." && pwd)
 out=${1:-"$app/dist/store.anth"}

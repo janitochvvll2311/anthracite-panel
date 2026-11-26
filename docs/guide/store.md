@@ -4,6 +4,28 @@ The store app browses signed catalogues. It searches, caches indexes and bundles
 verifies every read and streams a digest-pinned bundle. It has no install verb:
 the panel manager performs the install with the operator's session.
 
+`base` ships the store and composes it on a clean install. Its first start seeds
+the Anthracite website as the default catalogue source when
+`{data}/sources.json` is missing or empty:
+
+```json
+{
+  "sources": [
+    {
+      "id": "anthracite",
+      "name": "Anthracite",
+      "kind": "native",
+      "url": "https://anth-panel.com/store",
+      "public-key": "df65b29d879a40159919ca688ba0df40407147ff0d2231e6b56f04d3bf385b8d",
+      "allow-private": false
+    }
+  ]
+}
+```
+
+A non-empty source list is never modified. Operators can add `native`, `github`
+or `local` sources, or remove the default, from the store UI.
+
 Design: [§27](../design/27-app-store.md). Decisions: [ADR 0011](../decisions/0011-where-does-the-store-s-catalogue-trust-live-and-who-installs.md),
 [0012](../decisions/0012-when-is-a-bundle-digest-checked-relative-to-the-download-stream.md).
 The catalogue format is also documented in [`apps/store/README.md`](../../apps/store/README.md).

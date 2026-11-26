@@ -22,7 +22,7 @@ and the panel are ordinary processes.
 | Variant | Contains | Start |
 | --- | --- | --- |
 | `core` | `anth`, `anth-engine`, `anth-panel`; empty composition | `./run.sh` |
-| `base` | core + the eight signed system bundles | `./run.sh` installs, approves and composes |
+| `base` | core + the eight signed system bundles + Store | `./run.sh` installs, approves and composes |
 | `demo` | core + the eight emulated system bundles, one state per run | `./run.sh` |
 | `demo-sessions` | demo with one ephemeral, Turnstile-gated session per browser | `./run.sh` (landing page on 8091) |
 

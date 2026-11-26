@@ -22,6 +22,10 @@ egress = ["any"]
   entry names a `kind` (`native`, `github` or `local`), a URL and an Ed25519
   **public key**: that key is the catalogue's trust root, and an index cannot
   introduce its own.
+- Release builds ship with the Anthracite website as the default source. On the
+  first start, and when the list exists but is empty, the store writes:
+  `https://anth-panel.com/store` with the site catalogue key. A configured list
+  is never modified.
 - A private or loopback URL needs `allow-private`; a missing key, a bad signature
   or a schema other than 1 is refused.
 - The service has no operator session and no install verb. It caches indexes and

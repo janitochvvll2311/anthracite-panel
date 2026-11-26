@@ -62,6 +62,7 @@ fingerprint=$(sed -n 's/.*"fingerprint": "\([^"]*\)".*/\1/p' "$release/manifest.
 }
 
 system_apps="accounts firewall fs home net proc storage terminal"
+base_apps="$system_apps store"
 arch=$(uname -m)
 platform="linux-$arch"
 
@@ -210,7 +211,8 @@ RUN
 }
 
 variant_manifest() {
-    # $1 dir, $2 variant, $3 file prefix (bundles/<app>.anth), $4 signed yes|no
+    # $1 dir, $2 variant, $3 file prefix (bundles/<app>.anth), $4 signed yes|no,
+    # $5 app list
     {
         printf '{\n'
         printf '  "variant": "%s",\n' "$2"
@@ -220,7 +222,7 @@ variant_manifest() {
         printf '  "distribution_key": {"public_key": "%s", "fingerprint": "%s"},\n' "$public" "$fingerprint"
         printf '  "apps": ['
         first=1
-        for app in $system_apps; do
+        for app in $5; do
             case "$2" in
                 core) break ;;
             esac
@@ -282,19 +284,19 @@ sha256sum -c SHA256SUMS
 The engine trusts the distribution key \`$fingerprint\`. Install bundles later with
 \`bin/anth app install\`; nothing is preinstalled here.
 EOF
-variant_manifest "$out/core" core bundles false
+variant_manifest "$out/core" core bundles false ""
 
 echo "variants: staging base"
 mkdir -p "$out/base/bin" "$out/base/bundles"
 cp "$release"/bin/anth "$release"/bin/anth-engine "$release"/bin/anth-panel "$out/base/bin/"
-for app in $system_apps; do
+for app in $base_apps; do
     [ -f "$release/bundles/$app.anth" ] || { echo "the release has no $app bundle" >&2; exit 1; }
     cp "$release/bundles/$app.anth" "$out/base/bundles/"
 done
 cat > "$out/base/variant.conf" <<EOF
 MODE=base
 VERSION=$version
-APPS="$system_apps"
+APPS="$base_apps"
 HOST_APPS="accounts firewall fs home net storage terminal"
 REQUIRE_SIGNATURE=true
 ALLOW_UNVERIFIED=false
@@ -305,9 +307,9 @@ run_script "$out/base"
 cat > "$out/base/README.md" <<EOF
 # Anthracite $version — base
 
-The panel, the CLI and the engine plus the eight **signed system apps**:
-accounts, firewall, fs, home, net, proc, storage and terminal. They install as
-\`system\`; the engine trusts the distribution key \`$fingerprint\`.
+The panel, the CLI and the engine plus the eight **signed system apps** and the
+**Store**: accounts, firewall, fs, home, net, proc, storage, terminal and store.
+They install as \`system\`; the engine trusts the distribution key \`$fingerprint\`.
 
 ## Run
 
@@ -334,7 +336,7 @@ The state persists in \`state/\`; remove it to start over. Keep the state path
 short: every service socket lives under it and Linux caps a Unix socket path at
 107 bytes, so a deeply nested checkout can degrade every native app.
 EOF
-variant_manifest "$out/base" base bundles true
+variant_manifest "$out/base" base bundles true "$base_apps"
 
 echo "variants: staging demo"
 mkdir -p "$out/demo/bin" "$out/demo/bundles"
@@ -392,7 +394,7 @@ session state; \`{shared}\` is the service trust domain. Keep the session state
 path short: every service socket lives under it and Linux caps a Unix socket
 path at 107 bytes.
 EOF
-variant_manifest "$out/demo" demo bundles true
+variant_manifest "$out/demo" demo bundles true "$system_apps"
 
 echo "variants: staging demo-sessions"
 cargo build --manifest-path demo/sessions/Cargo.toml --release
@@ -495,7 +497,7 @@ Each session's state is a complete engine tree: \`state/sessions/<id>/state\` ho
 its apps, grants, audit and the emulator snapshot at
 \`state/sessions/<id>/state/shared/emulator/host.json\`.
 EOF
-variant_manifest "$out/demo-sessions" demo-sessions bundles true
+variant_manifest "$out/demo-sessions" demo-sessions bundles true "$system_apps"
 
 echo "variants: checksums and archives"
 for variant in core base demo demo-sessions; do
@@ -524,7 +526,7 @@ done
     printf 'Four variants built from the same signed release. The distribution key fingerprint is `%s`; every bundle in `base` and `demo` (including the signed host emulator) is `system`-signed, and the binaries in all four trust that key.\n\n' "$fingerprint"
     printf '| Variant | Contents | Start |\n| --- | --- | --- |\n'
     printf '| `core` | panel, CLI, engine, **no apps** | `./run.sh` |\n'
-    printf '| `base` | core + the eight signed system apps | `./run.sh` (installs and composes) |\n'
+    printf '| `base` | core + the eight signed system apps + Store | `./run.sh` (installs and composes) |\n'
     printf '| `demo` | core + the signed host-emulator bundles, one state per run | `./run.sh` |\n'
     printf '| `demo-sessions` | demo + one ephemeral, CAPTCHA-gated session per browser | `./run.sh` (landing page) |\n\n'
     printf 'Each archive contains `bin/`, `run.sh`, a `README.md`, a `manifest.json` and `SHA256SUMS`; `base`, `demo` and `demo-sessions` also carry `bundles/`. Verify with `sha256sum -c SHA256SUMS` (and again over this file for the tarballs).\n\n'

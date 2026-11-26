@@ -10,12 +10,19 @@ and to the design where the reason matters.
 
 ## State
 
-`v0.8.0` is the last shipped release, the App SDK: `cargo anth` / `anth` for
-Rust and `bunx @anth-panel/cli` for Bun. The six public crates (`anth-error`,
-`anth-bundle`, `anth-guest`, `anth-service`, `anth-client`, `cargo-anth`) are
-published on crates.io and the six `@anth-panel/*` packages on npm, all at
-`0.8.0`; the four variants, `SHA256SUMS` and the per-app bundles are in the
-`v0.8.0` GitHub Release. The contract is
+`v0.8.1` is the current release: a distribution update over the `v0.8.0` App SDK.
+The engine and panel binaries are unchanged; the `base` variant now ships and
+composes `org.anthracite.store`, and the store seeds
+`https://anth-panel.com/store` as its default catalogue source on a clean install
+or an empty `sources.json`. The website serves the signed catalogue at
+`/store/index.json` and `/store/index.json.sig`; it lists the official apps and
+the third-party versions without uploading bundles.
+
+`v0.8.0` is the App SDK: `cargo anth` / `anth` for Rust and `bunx @anth-panel/cli`
+for Bun. The six public crates (`anth-error`, `anth-bundle`, `anth-guest`,
+`anth-service`, `anth-client`, `cargo-anth`) are published on crates.io and the
+six `@anth-panel/*` packages on npm; the four variants, `SHA256SUMS` and the
+per-app bundles are in the `v0.8.0` GitHub Release. The contract is
 `docs/design/31-sdk-distribution.md` and ADRs 0013–0018; the close report is
 `docs/features/app-sdk/report.md`.
 

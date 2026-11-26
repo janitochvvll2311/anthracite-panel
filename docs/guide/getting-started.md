@@ -11,7 +11,7 @@ Unpack one and run its `run.sh`; there is no installer and no daemon setup.
 | Variant | Apps | State |
 | --- | --- | --- |
 | `core` | none; an empty composition | `state/` |
-| `base` | the eight signed system apps | `state/` |
+| `base` | the eight signed system apps plus Store | `state/` |
 | `demo` | the eight emulated system apps | a fresh `state/session-*` per run |
 | `demo-sessions` | the same eight apps, one ephemeral session per browser | `state/sessions/<id>` |
 

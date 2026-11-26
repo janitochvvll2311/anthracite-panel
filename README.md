@@ -132,12 +132,13 @@ docs/       design, feature reports and the guide
 
 ## Project status
 
-`v0.7.0` is the current release line: manifest v4, the sandbox L1, the broker
-and surface exports, and the operated edge apps. The previous `v0.6` line is
-preserved as tagged releases and documentation. The project is under active
-development; interfaces and bundle formats may change between minor releases.
-See [`docs/guide/release-notes.md`](docs/guide/release-notes.md) for the
-release history and known limitations.
+`v0.8.1` is the current release: the App SDK plus the store in the `base`
+variant. The engine and panel binaries are unchanged from `0.8.0`. A clean
+`base` install composes the eight signed system apps and the store, which seeds
+the Anthracite website as its default catalogue source. The store downloads
+every app bundle from the publisher's URL; the website only holds metadata and a
+signed catalogue. See [`docs/guide/release-notes.md`](docs/guide/release-notes.md)
+for the release history and known limitations.
 
 ## Contributing
 

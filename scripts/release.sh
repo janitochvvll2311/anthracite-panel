@@ -9,6 +9,7 @@
 # private one. It refuses to finish if any bundle is not `system` or if the built
 # engine reports another fingerprint. The key is never printed.
 set -eu
+export ANTHRACITE_RELEASE=1
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 invoked=$(pwd)
 cd "$root"

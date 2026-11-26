@@ -31,22 +31,60 @@ pub struct Config {
     pub sources: Vec<Source>,
 }
 
+/// The catalogue published by the Anthracite website. Release builds set both
+/// variables; development and test builds leave them unset.
+const DEFAULT_SOURCE_URL: Option<&str> = option_env!("ANTHRACITE_STORE_SOURCE_URL");
+const DEFAULT_SOURCE_KEY: Option<&str> = option_env!("ANTHRACITE_STORE_SOURCE_KEY");
+
+fn default_source() -> Option<Source> {
+    let url = DEFAULT_SOURCE_URL?.trim();
+    let key = DEFAULT_SOURCE_KEY?.trim().to_ascii_lowercase();
+    if url.is_empty() || key.len() != 64 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(Source {
+        id: "anthracite".to_string(),
+        name: "Anthracite".to_string(),
+        kind: "native".to_string(),
+        url: url.to_string(),
+        public_key: key,
+        allow_private: false,
+    })
+}
+
 impl Config {
     pub fn path(data: &Path) -> PathBuf {
         data.join("sources.json")
     }
 
     pub fn load(data: &Path) -> Result<Self, Error> {
+        Self::load_with(data, default_source())
+    }
+
+    /// Seeded on a clean install and when the operator left the list empty.
+    /// A non-empty list is never modified.
+    fn load_with(data: &Path, default: Option<Source>) -> Result<Self, Error> {
         let path = Self::path(data);
-        if !path.exists() {
-            let bytes = serde_json::to_vec_pretty(&Config::default())
+        let exists = path.exists();
+        let mut config = if exists {
+            let raw = fs::read(&path).map_err(|error| {
+                Error::unavailable(format!("reading {}: {error}", path.display()))
+            })?;
+            serde_json::from_slice(&raw)
+                .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?
+        } else {
+            Config::default()
+        };
+
+        let seeded = config.sources.is_empty() && default.is_some();
+        if seeded {
+            config.sources.push(default.expect("checked above"));
+        }
+        if !exists || seeded {
+            let bytes = serde_json::to_vec_pretty(&config)
                 .map_err(|error| Error::internal(format!("encoding the sources: {error}")))?;
             write_private(&path, &bytes)?;
         }
-        let raw = fs::read(&path)
-            .map_err(|error| Error::unavailable(format!("reading {}: {error}", path.display())))?;
-        let config: Config = serde_json::from_slice(&raw)
-            .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
         config.validate()?;
         Ok(config)
     }
@@ -242,5 +280,70 @@ mod tests {
             sources: vec![source("local", "airgap", false)],
         };
         assert!(config.validate().is_ok());
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("anthracite-store-config")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch");
+        dir
+    }
+
+    fn default_source() -> Source {
+        Source {
+            id: "anthracite".to_string(),
+            name: "Anthracite".to_string(),
+            kind: "native".to_string(),
+            url: "https://anth-panel.com/store".to_string(),
+            public_key: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string(),
+            allow_private: false,
+        }
+    }
+
+    #[test]
+    fn a_missing_file_is_created_empty_without_a_default() {
+        let dir = scratch("missing-none");
+        let config = Config::load_with(&dir, None).expect("load");
+        assert!(config.sources.is_empty());
+        assert!(Config::path(&dir).exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_clean_install_gets_the_default_source() {
+        let dir = scratch("missing-default");
+        let config = Config::load_with(&dir, Some(default_source())).expect("load");
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].id, "anthracite");
+        assert_eq!(config.sources[0].url, "https://anth-panel.com/store");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_empty_list_is_seeded_but_a_configured_list_is_kept() {
+        let dir = scratch("empty-default");
+        fs::write(Config::path(&dir), r#"{"sources":[]}"#).expect("write");
+        let config = Config::load_with(&dir, Some(default_source())).expect("load");
+        assert_eq!(config.sources.len(), 1);
+        let _ = fs::remove_dir_all(dir);
+
+        let dir = scratch("configured");
+        let configured = source("local", "airgap", false);
+        fs::write(
+            Config::path(&dir),
+            serde_json::to_vec_pretty(&Config {
+                sources: vec![configured.clone()],
+            })
+            .expect("encode"),
+        )
+        .expect("write");
+        let config = Config::load_with(&dir, Some(default_source())).expect("load");
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].id, configured.id);
+        assert_eq!(config.sources[0].kind, "local");
+        let _ = fs::remove_dir_all(dir);
     }
 }
