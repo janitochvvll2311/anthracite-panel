@@ -18,7 +18,6 @@ const result = await Bun.build({
 ```
 
 Bun 1.4.4 does not apply a `bunfig.toml` preload plugin to build resolution, so
-the plugin is registered explicitly in the build script (or in a preload that
-runs `Bun.plugin(anthPlugin())` before the build). It is not a `bun anth`
+the plugin is registered explicitly in the build script. It is not a `bun anth`
 subcommand and not a runtime module resolver; the CLI remains
 `bunx @anth-panel/cli`.
