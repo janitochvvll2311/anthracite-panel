@@ -6,24 +6,20 @@
 //! verified bundle is an installed candidate, still without a grant.
 
 use std::collections::BTreeSet;
-use std::fs::{self, DirBuilder, OpenOptions};
-use std::io::{Cursor, Read};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::fs::{self, DirBuilder};
+#[cfg(test)]
+use std::io::Cursor;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anth_contract::manifest::parse_call;
-use anth_contract::{catalog, signature, Error, InterfaceId, Manifest, Tier};
+use anth_contract::{catalog, Error, InterfaceId, Manifest, Tier};
 use sha2::{Digest, Sha256};
 use wit_parser::{Type, TypeDefKind, UnresolvedPackage, UnresolvedPackageGroup};
 
 use crate::keys::{Distribution, Keyring};
 use crate::store;
-
-/// A bundle that unpacks to more entries than this is refused before reading.
-const MAX_FILES: usize = 512;
-/// Per-file uncompressed cap, and the total is the same as the body cap.
-const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 static STAGING: AtomicU64 = AtomicU64::new(0);
 
@@ -149,7 +145,7 @@ fn verify(
     // A binary that names a key it cannot parse must not install anything: the
     // tier of every future bundle would be a guess.
     distribution.check()?;
-    unpack(root, bundle, options.max_bundle_bytes)?;
+    anth_bundle::unpack(root, bundle, options.max_bundle_bytes)?;
 
     let manifest_text = read_required(root, "manifest.toml")?;
     let text = std::str::from_utf8(&manifest_text)
@@ -189,91 +185,6 @@ fn verify(
         tier,
         keep: false,
     })
-}
-
-fn unpack(root: &Path, bundle: &[u8], max_total: u64) -> Result<(), Error> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bundle))
-        .map_err(|error| Error::invalid(format!("the bundle is not a zip: {error}")))?;
-    if archive.len() > MAX_FILES {
-        return Err(Error::too_large(format!(
-            "the bundle has {} entries; the limit is {MAX_FILES}",
-            archive.len()
-        )));
-    }
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut total: u64 = 0;
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| Error::invalid(format!("reading the bundle: {error}")))?;
-        let name = entry
-            .enclosed_name()
-            .ok_or_else(|| Error::invalid(format!("`{}` escapes the bundle", entry.name())))?;
-        let mut relative = name
-            .to_str()
-            .ok_or_else(|| Error::invalid(format!("`{}` is not UTF-8", entry.name())))?
-            .to_string();
-        // Zip directory entries carry a trailing slash; the path is the same as
-        // the name without it, so normalize before the checks and the dedup.
-        while relative.ends_with('/') {
-            relative.pop();
-        }
-        if relative.contains('\\') || relative.contains('\0') {
-            return Err(Error::invalid(format!(
-                "`{relative}` is not a plain path inside the bundle"
-            )));
-        }
-        if relative
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
-        {
-            return Err(Error::invalid(format!(
-                "`{relative}` is not a plain path inside the bundle"
-            )));
-        }
-        if !seen.insert(relative.clone()) {
-            return Err(Error::invalid(format!(
-                "`{relative}` appears twice in the bundle"
-            )));
-        }
-        if let Some(mode) = entry.unix_mode() {
-            if mode & 0o170000 == 0o120000 {
-                return Err(Error::invalid(format!(
-                    "`{relative}` is a symlink; bundles hold real files"
-                )));
-            }
-        }
-        let path = root.join(&name);
-        if entry.is_dir() {
-            create_dir_private(&path)?;
-            continue;
-        }
-        if let Some(parent) = path.parent() {
-            create_dir_private(parent)?;
-        }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(store::FILE_MODE)
-            .open(&path)
-            .map_err(|error| Error::internal(format!("creating {}: {error}", path.display())))?;
-        let copied = std::io::copy(&mut entry.by_ref().take(MAX_FILE_BYTES + 1), &mut file)
-            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))?;
-        if copied > MAX_FILE_BYTES {
-            return Err(Error::too_large(format!(
-                "`{relative}` is larger than {MAX_FILE_BYTES} bytes"
-            )));
-        }
-        file.sync_all()
-            .map_err(|error| Error::internal(format!("syncing {}: {error}", path.display())))?;
-        total += copied;
-        if total > max_total {
-            return Err(Error::too_large(format!(
-                "the bundle expands to more than {max_total} bytes"
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// The layout is closed: the manifest, its signature, WIT sources, the
@@ -617,16 +528,7 @@ fn check_hash(root: &Path, relative: &str, expected: &str) -> Result<(), Error> 
 /// file, sorted by name (§9.1, D-Signature-Message). Shared with the signer and
 /// with the stored-descriptor check, so all three agree on what is signed.
 pub fn signed_message(root: &Path) -> Result<Vec<u8>, Error> {
-    let mut files = vec![(
-        "manifest.toml".to_string(),
-        read_required(root, "manifest.toml")?,
-    )];
-    for (relative, is_file) in walk(root)? {
-        if is_file && relative.starts_with("wit/") {
-            files.push((relative.clone(), read_required(root, &relative)?));
-        }
-    }
-    signature::message(&files)
+    anth_bundle::signed_message(root)
 }
 
 fn read_required(root: &Path, relative: &str) -> Result<Vec<u8>, Error> {
@@ -697,40 +599,6 @@ fn sync_tree(root: &Path) -> Result<(), Error> {
     fs::File::open(root)
         .and_then(|dir| dir.sync_all())
         .map_err(|error| Error::internal(format!("syncing {}: {error}", root.display())))
-}
-
-/// Creates `path` and every missing parent with `0700`, never with the umask.
-fn create_dir_private(path: &Path) -> Result<(), Error> {
-    if path.as_os_str().is_empty() {
-        return Ok(());
-    }
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => return Ok(()),
-        Ok(_) => {
-            return Err(Error::invalid(format!(
-                "{} exists and is not a directory",
-                path.display()
-            )));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(Error::internal(format!(
-                "inspecting {}: {error}",
-                path.display()
-            )));
-        }
-    }
-    if let Some(parent) = path.parent() {
-        create_dir_private(parent)?;
-    }
-    match DirBuilder::new().mode(store::DIR_MODE).create(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(Error::internal(format!(
-            "creating {}: {error}",
-            path.display()
-        ))),
-    }
 }
 
 #[cfg(test)]

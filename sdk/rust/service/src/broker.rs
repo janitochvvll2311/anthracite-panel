@@ -2,7 +2,7 @@
 //! `{broker}` socket, never through the public router (§22, D9).
 //!
 //! ```no_run
-//! # async fn example() -> Result<(), anth_contract::Error> {
+//! # async fn example() -> Result<(), anth_error::Error> {
 //! let broker = anth_service::Broker::new("/var/lib/anth/broker/org.example.consumer.sock");
 //! let answer = broker
 //!     .call("example:provider/greeting@1.0.0", "greet", serde_json::json!({"name": "Ada"}))
@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
-use anth_contract::Error;
+use anth_error::Error;
 use futures_core::Stream;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -312,11 +312,11 @@ async fn send(
 }
 
 fn envelope_error(payload: &[u8]) -> Error {
-    match serde_json::from_slice::<anth_contract::ErrorEnvelope>(payload) {
+    match serde_json::from_slice::<anth_error::ErrorEnvelope>(payload) {
         Ok(envelope) => {
             let body = envelope.error;
-            let kind = anth_contract::ErrorKind::from_code(&body.code)
-                .unwrap_or(anth_contract::ErrorKind::Unavailable);
+            let kind = anth_error::ErrorKind::from_code(&body.code)
+                .unwrap_or(anth_error::ErrorKind::Unavailable);
             let mut error = Error::new(kind, body.message);
             if let Some(app) = body.app {
                 error = error.with_app(&app);
@@ -416,7 +416,7 @@ mod tests {
             let chunk = json!({"chunk": base64::engine::general_purpose::STANDARD.encode(b"one")});
             write_test_frame(&mut stream, &serde_json::to_vec(&chunk).expect("chunk")).await;
             let error = serde_json::to_vec(
-                &anth_contract::Error::exhausted("the stream budget ran out").envelope(),
+                &anth_error::Error::exhausted("the stream budget ran out").envelope(),
             )
             .expect("error");
             write_test_frame(&mut stream, &error).await;
@@ -432,7 +432,7 @@ mod tests {
             .await
             .expect("error frame")
             .expect_err("exhausted");
-        assert_eq!(error.kind(), anth_contract::ErrorKind::Exhausted);
+        assert_eq!(error.kind(), anth_error::ErrorKind::Exhausted);
         assert!(chunks.next().await.is_none());
         server.await.expect("server");
         let _ = std::fs::remove_file(&socket);

@@ -6,6 +6,7 @@ license.workspace = true
 description = "The composer: composition plus installed manifests, resolved into what runs"
 
 [dependencies]
+anth-bundle = { path = "../bundle" }
 anth-contract = { path = "../contract", features = ["parse"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"] }

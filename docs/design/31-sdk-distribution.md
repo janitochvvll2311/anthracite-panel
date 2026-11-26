@@ -29,7 +29,7 @@ bunx @anth-panel/cli app new org.example.notes --lang bun
 | `anth-service` | crates.io | native services in Rust | yes |
 | `anth-client` | crates.io | HTTP/CLI clients in Rust | yes |
 | `anth-error` | crates.io | error kind and envelope shared by services and bundles | yes |
-| `anth-bundle` | crates.io | manifest/WIT/signature/zip primitives | yes |
+| `anth-bundle` | crates.io | canonical message, WIT/file hashes, zip unpack and signature | yes |
 | `@anth-panel/panel` | npm | app UI in Bun/browser | yes |
 | `@anth-panel/client` | npm | transport and generic client | yes |
 | `@anth-panel/wit` | npm | versioned WIT catalog | yes |
@@ -115,9 +115,11 @@ file.
 
 ## 5. Shared bundle code: `anth-bundle`
 
-Manifest parsing, the canonical `manifest.sig` message, WIT hashing, bundle
-reading and the digest rules live in `anth-bundle`, which lives in the engine
-tree at `engine/bundle` and is published from there. This is what lets the
+The canonical `manifest.sig` message, the WIT/file hashes, the confined zip
+unpack and the Ed25519 verification live in `anth-bundle`, which lives in the
+engine tree at `engine/bundle` and is published from there. Manifest parsing
+and WIT semantic validation stay in the engine; a tool that needs them calls
+`anth-conformance`. This is what lets the
 engine depend on it without breaking the rule that forbids `engine/* -> sdk`
 ([§10.1](10-workspace.md#101-the-edges-we-forbid)); `anth-sign`,
 `anth-conformance` and `cargo-anth` depend on the same crate, so a signature

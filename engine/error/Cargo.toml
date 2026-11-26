@@ -1,0 +1,14 @@
+[package]
+name = "anth-error"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The shared error kind and envelope of Anthracite"
+repository = "https://github.com/janitochvvll2311/anthracite-panel"
+readme = "README.md"
+keywords = ["anthracite", "error", "sdk"]
+categories = ["development-tools"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

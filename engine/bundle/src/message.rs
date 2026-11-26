@@ -13,7 +13,7 @@
 //! The wasm and UI modules are not in the message; their hashes live in the
 //! manifest, which is in the message.
 
-use crate::error::Error;
+use anth_error::Error;
 
 pub const MESSAGE_PREFIX: &[u8] = b"anth-manifest-v2\0";
 

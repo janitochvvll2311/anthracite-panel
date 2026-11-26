@@ -1,0 +1,17 @@
+[package]
+name = "anth-bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The canonical bundle message, hashes and Ed25519 signature primitives"
+repository = "https://github.com/janitochvvll2311/anthracite-panel"
+readme = "README.md"
+keywords = ["anthracite", "wasm", "bundle", "signature"]
+categories = ["development-tools"]
+
+[dependencies]
+anth-error = { version = "0.8.0", path = "../error" }
+base64 = "0.22"
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"] }
+sha2 = "0.10"
+zip = { version = "2.6", default-features = false, features = ["deflate"] }

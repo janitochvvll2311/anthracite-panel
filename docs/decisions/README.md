@@ -21,3 +21,4 @@ Decisiones registradas durante la implementación de features.
 | [0015](0015-what-code-is-shared-between-the-engine-and-the-sdk-tools.md) | 2026-11-25 | What code is shared between the engine and the SDK tools? |
 | [0016](0016-how-are-engine-sdk-and-wit-versions-aligned.md) | 2026-11-25 | How are engine, SDK and WIT versions aligned? |
 | [0017](0017-how-are-npm-package-names-scoped-and-are-unscoped-aliases-allowe.md) | 2026-11-25 | How are npm package names scoped, and are unscoped aliases allowed? |
+| [0018](0018-what-exactly-does-anth-bundle-own.md) | 2026-11-26 | What exactly does anth-bundle own? |

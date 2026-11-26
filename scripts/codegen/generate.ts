@@ -361,6 +361,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Generated clients for Anthracite apps"
+repository = "https://github.com/janitochvvll2311/anthracite-panel"
+readme = "README.md"
+keywords = ["anthracite", "client", "sdk"]
+categories = ["development-tools"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
