@@ -45,14 +45,10 @@ for package in $packages; do
 done
 echo "npm: $mode complete: $packages"
 if [ "$mode" = check ]; then
-    if ! git diff --exit-code -- sdk/ts/panel/dist sdk/ts/client/dist sdk/ts/bun-plugin/dist; then
-        echo "npm: the committed dist/ is stale" >&2
-        exit 1
-    fi
-    untracked=$(git ls-files --others --exclude-standard -- sdk/ts/panel/dist sdk/ts/client/dist sdk/ts/bun-plugin/dist)
-    if [ -n "$untracked" ]; then
-        echo "npm: dist/ has untracked files:" >&2
-        printf '%s\n' "$untracked" >&2
+    changed=$(git status --porcelain -- sdk/ts/panel/dist sdk/ts/client/dist sdk/ts/bun-plugin/dist)
+    if [ -n "$changed" ]; then
+        echo "npm: the committed dist/ is stale or has changes:" >&2
+        printf '%s\n' "$changed" >&2
         exit 1
     fi
 fi

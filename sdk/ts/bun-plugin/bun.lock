@@ -9,7 +9,7 @@
         "typescript": "5.6.3",
       },
       "peerDependencies": {
-        "@anth-panel/client": "^0.8.0",
+        "@anth-panel/client": "0.8.0",
       },
     },
   },
