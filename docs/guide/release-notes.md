@@ -1,5 +1,68 @@
 # Release notes
 
+## 0.8.0 — the App SDK
+
+`v0.8.0` turns the public repository into an installable SDK for third-party
+apps. The engine and the five edge apps are unchanged; this line is about the
+authoring path.
+
+### Rust
+
+- `cargo install cargo-anth` provides `cargo anth`; the release also ships
+  `anth`, `anth-sign` and `anth-conformance`.
+- `anth app new|doctor|build|check|package|sign|verify` creates a standalone
+  project in `/tmp` and ends with a signed bundle.
+- Publishable crates: `anth-error`, `anth-bundle`, `anth-guest`,
+  `anth-service`, `anth-client` and `cargo-anth`. `anth-bundle` owns the
+  canonical signed message, WIT/file hashes, confined zip unpack and Ed25519;
+  `anth-error` is the small error model extracted from the contract.
+
+### Bun
+
+- `bun add @anth-panel/panel @anth-panel/client` for the UI contract and
+  generated clients.
+- `bunx @anth-panel/cli app ...` for the same workflow, with `ANTH_BIN` and
+  `cargo anth` fallbacks.
+- `@anth-panel/create-app` scaffolds; `@anth-panel/bun-plugin` resolves the
+  virtual `anth:client` module in `Bun.build`.
+- `@anth-panel/wit` carries the versioned host catalog.
+
+### Guides and examples
+
+- [App SDK](sdk.md) is the quickstart and reference; `anth.toml` is the only
+  config.
+- `examples/sdk/rust` and `examples/sdk/bun` are generated projects.
+- `anth app doctor` checks cargo, rustc, the wasm target, wasm-tools, Bun and
+  the signing tools.
+
+### Images
+
+The four container variants are published to GHCR:
+
+| Image | Tags |
+| --- | --- |
+| `ghcr.io/<owner>/anthracite-panel` | `core`, `base`, `demo` and `0.8.0-*` |
+| `ghcr.io/<owner>/anthracite-demo` | `main` and `0.8.0-demo-sessions` |
+
+The versioned tags are immutable; the moving tags point at the latest release.
+
+### Upgrade
+
+Back up `$state`, verify `SHA256SUMS`, replace the binaries/bundles, and restart.
+`0.7.x` state is read by `0.8.0`; a downgrade is not supported after a `0.8.0`
+binary writes the state. The engine contract is unchanged; the new packages are
+additive.
+
+### Known limitations
+
+- Bun 1.4.4 does not apply a `bunfig.toml` preload plugin to build resolution;
+  register `@anth-panel/bun-plugin` in `Bun.build` explicitly.
+- The native-service template lands with the service SDK; the current
+  templates are Rust wasm and Bun panel.
+- Egress remains intent until L2; the container runtime socket is
+  root-equivalent for containers.
+- Publication from CI still waits for a GitHub runner; the scripts are manual.
+
 ## 0.7.0 — the edge composition
 
 `v0.7.0` is the M6 milestone: five business apps, the sandbox L1 and the port

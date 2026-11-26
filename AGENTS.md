@@ -21,8 +21,9 @@ capability, the broker/audit/surface exports, and the five edge apps (`certs`,
 The `v0.8.0` line is the third-party SDK: `cargo anth` / `anth` for Rust and
 `bunx @anth-panel/cli` for Bun, with publishable crates and npm packages under
 the `anth-panel` owner. The contract is
-`docs/design/31-sdk-distribution.md` and ADRs 0013–0016; the packages are not
-published yet. The line branches from `main` after `v0.7.0`.
+`docs/design/31-sdk-distribution.md` and ADRs 0013–0018; the code and release
+scripts are complete, and publication runs on `v0.8.0` after this phase. The
+line branches from `main` after `v0.7.0`.
 
 Previous lines are preserved in the design, the guide and the feature reports;
 their tags are not guaranteed to exist. Do not copy code from an old line.
@@ -96,6 +97,9 @@ scripts/release-sdk.sh --check
 
 # build/pack/publish the @anth-panel npm packages
 scripts/release-npm.sh --check
+
+# publish the four images to GHCR (skopeo login first)
+scripts/release-ghcr.sh --images <release-images-dir> --public
 
 # browser e2e against a running panel (tests/e2e/README.md)
 (cd tests/e2e && bun install)
