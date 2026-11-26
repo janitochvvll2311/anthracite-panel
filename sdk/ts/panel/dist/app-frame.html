@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
+    <meta name="color-scheme" content="dark" />
+    <title>Anthracite app</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        /* The panel's palette, mirrored into every app frame so an official
+           module can share the family without hardcoding a new hue. */
+        --bg: #0b0d12;
+        --bg-soft: #0f1219;
+        --panel: #141821;
+        --panel-2: #1a1f2b;
+        --panel-3: #232938;
+        --line: #2a3142;
+        --line-soft: #202634;
+        --text: #e8ebf2;
+        --muted: #8f98ab;
+        --muted-2: #667087;
+        --accent: #7aa2ff;
+        --accent-2: #9d7bff;
+        --good: #52d1a4;
+        --warn: #f3c969;
+        --danger: #ff7d8a;
+        --shadow: 0 24px 70px #00000073;
+        --radius: 10px;
+      }
+      * { box-sizing: border-box; }
+      html { background: transparent; }
+      html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+      html { background: transparent; }
+      body {
+        background: transparent;
+        color: var(--text);
+        font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // The sandboxed side of the panel contract. This classic script runs in an
+      // opaque origin, receives the app module source from the panel, imports it
+      // from a blob, and forwards every request through a scoped RPC.
+      (() => {
+        const pending = new Map();
+        const pendingViews = new Map();
+        const pendingModals = new Map();
+        const actionHandlers = new Set();
+        const sockets = new Map();
+        const visibilityHandlers = new Set();
+        let token = "";
+        let lastFocused = null;
+        let dispose = null;
+        let moduleApi = null;
+
+        const send = (type, payload = {}) => {
+          parent.postMessage({ type, token, ...payload }, "*");
+        };
+
+        const responseLike = (meta, body, text) => ({
+          ok: meta.ok,
+          status: meta.status,
+          statusText: meta.statusText,
+          headers: {
+            get: (name) => meta.headers[String(name).toLowerCase()] ?? null,
+            forEach: (callback) =>
+              Object.entries(meta.headers).forEach(([name, value]) =>
+                callback(value, name),
+              ),
+          },
+          body,
+          text,
+          json: async () => JSON.parse(await text()),
+        });
+
+        const request = (input, init = {}) => {
+          const url = typeof input === "string" ? input : input.url;
+          const headers = init.headers
+            ? Object.fromEntries(new Headers(init.headers))
+            : {};
+          const body =
+            init.body == null
+              ? undefined
+              : typeof init.body === "string"
+                ? init.body
+                : String(init.body);
+          const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+          return new Promise((resolve, reject) => {
+            let controller = null;
+            let settled = false;
+            let ended = false;
+            let resolvePull = null;
+            const finishPull = () => {
+              if (resolvePull) resolvePull();
+              resolvePull = null;
+            };
+            const call = {
+              reject: (error) => {
+                if (settled) return;
+                settled = true;
+                pending.delete(id);
+                reject(error);
+              },
+              buffered: (result) => {
+                if (settled) return;
+                settled = true;
+                pending.delete(id);
+                resolve(responseLike(result, null, async () => result.body));
+              },
+              head: (meta) => {
+                if (settled) return;
+                settled = true;
+                const stream = new ReadableStream({
+                  start: (value) => {
+                    controller = value;
+                  },
+                  // Returning the promise gates the next pull until this chunk
+                  // arrives, so at most one chunk is in flight at a time.
+                  pull: () => {
+                    if (ended) return;
+                    return new Promise((next) => {
+                      resolvePull = next;
+                      send("anth:stream-pull", { id });
+                    });
+                  },
+                  cancel: () => {
+                    ended = true;
+                    pending.delete(id);
+                    finishPull();
+                    send("anth:stream-cancel", { id });
+                  },
+                });
+                resolve(
+                  responseLike(meta, stream, async () => {
+                    const reader = stream.getReader();
+                    const decoder = new TextDecoder();
+                    let text = "";
+                    for (;;) {
+                      const { done, value } = await reader.read();
+                      if (done) break;
+                      text += decoder.decode(value, { stream: true });
+                    }
+                    return text + decoder.decode();
+                  }),
+                );
+              },
+              chunk: (data) => {
+                if (controller) controller.enqueue(new Uint8Array(data));
+                finishPull();
+              },
+              end: (error) => {
+                ended = true;
+                finishPull();
+                pending.delete(id);
+                if (!controller) return;
+                if (error) controller.error(new Error(error));
+                else controller.close();
+              },
+            };
+            pending.set(id, call);
+            send("anth:fetch", {
+              id,
+              url,
+              init: { method: init.method ?? "GET", headers, body },
+            });
+          });
+        };
+
+        const sendBytes = (type, id, data) => {
+          parent.postMessage({ type, token, id, data }, "*", [data]);
+        };
+
+        /// Opens one of the app's WebSocket routes through the panel. The frame
+        /// has an opaque origin and no cookie, so the panel owns the socket.
+        const openSocket = (route, handlers = {}) => {
+          const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+          const entry = { handlers, open: false, queue: [] };
+          sockets.set(id, entry);
+          send("anth:ws-open", { id, url: route });
+          return {
+            send: (data) => {
+              const buffer = data instanceof ArrayBuffer ? data : data.buffer;
+              if (entry.open) sendBytes("anth:ws-send", id, buffer);
+              else entry.queue.push(buffer);
+            },
+            close: () => send("anth:ws-close", { id }),
+          };
+        };
+
+        const report = () => {
+          const height = Math.ceil(document.documentElement.scrollHeight);
+          if (height > 0) send("anth:resize", { height });
+        };
+
+        const openView = (request) =>
+          new Promise((resolve) => {
+            const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+            pendingViews.set(id, resolve);
+            send("anth:open-view", { ...request, requestId: id });
+            setTimeout(() => {
+              if (pendingViews.delete(id)) resolve(false);
+            }, 1200);
+          });
+
+        const openModal = (request) =>
+          new Promise((resolve) => {
+            const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+            pendingModals.set(id, resolve);
+            send("anth:open-modal", { ...request, requestId: id });
+            setTimeout(() => {
+              if (pendingModals.delete(id)) resolve(false);
+            }, 1200);
+          });
+
+        document.addEventListener("focusin", (event) => {
+          if (
+            event.target instanceof HTMLElement &&
+            event.target !== document.body &&
+            event.target !== document.documentElement
+          ) {
+            lastFocused = event.target;
+          }
+        });
+
+        window.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") send("anth:escape");
+        });
+
+        window.addEventListener("message", async (event) => {
+          if (event.source !== parent) return;
+          const message = event.data;
+          if (!message || typeof message !== "object") return;
+
+          if (message.type === "anth:mount") {
+            token = message.token;
+            try {
+              const blob = new Blob([message.source], {
+                type: "text/javascript",
+              });
+              const url = URL.createObjectURL(blob);
+              const module = await import(url);
+              URL.revokeObjectURL(url);
+              if (typeof module.mount !== "function") {
+                throw new Error(
+                  "the module does not export mount(root, context)",
+                );
+              }
+              moduleApi = module;
+              const context = {
+                ...message.context,
+                fetch: request,
+                socket: openSocket,
+                close: () => send("anth:close"),
+                openView,
+                openModal,
+                onAction: (handler) => {
+                  actionHandlers.add(handler);
+                  return () => actionHandlers.delete(handler);
+                },
+                updateParams: (params) => send("anth:params", { params }),
+                fill: () => send("anth:fill"),
+                onVisibility: (handler) => {
+                  visibilityHandlers.add(handler);
+                  return () => visibilityHandlers.delete(handler);
+                },
+              };
+              document.documentElement.dataset.viewport =
+                message.context.panel?.viewport ?? "desktop";
+              dispose = await module.mount(document.body, context);
+              document.body.dataset.testid = "slot-root";
+              document.body.dataset.app = message.context.app.id;
+              document.body.dataset.slot = message.context.contribution.id;
+              document.body.dataset.tag = message.context.contribution.tag;
+              document.body.dataset.kind = message.context.kind;
+              document.body.dataset.state = "mounted";
+              document.documentElement.dataset.viewport =
+                message.context.panel?.viewport ?? "desktop";
+              send("anth:mounted");
+              report();
+            } catch (error) {
+              document.body.dataset.state = "error";
+              send("anth:error", {
+                message:
+                  error instanceof Error ? error.message : String(error),
+              });
+            }
+          } else if (message.type === "anth:viewport") {
+            document.documentElement.dataset.viewport =
+              message.viewport || "desktop";
+          } else if (message.type === "anth:visibility") {
+            for (const handler of visibilityHandlers) {
+              handler(message.visible === true);
+            }
+          } else if (message.type === "anth:fetch-result") {
+            const call = pending.get(message.id);
+            if (!call) return;
+            if (message.result?.error) {
+              call.reject(new Error(message.result.error));
+            } else {
+              call.buffered(message.result);
+            }
+          } else if (message.type === "anth:stream-head") {
+            const call = pending.get(message.id);
+            if (call) call.head(message);
+          } else if (message.type === "anth:stream-chunk") {
+            const call = pending.get(message.id);
+            if (call) call.chunk(message.data);
+          } else if (message.type === "anth:stream-end") {
+            const call = pending.get(message.id);
+            if (call) call.end(message.error);
+          } else if (message.type === "anth:ws-open-result") {
+            const entry = sockets.get(message.id);
+            if (!entry) return;
+            if (message.ok) {
+              entry.open = true;
+              for (const buffer of entry.queue.splice(0)) {
+                sendBytes("anth:ws-send", message.id, buffer);
+              }
+              if (typeof entry.handlers.onOpen === "function") {
+                entry.handlers.onOpen();
+              }
+            } else {
+              sockets.delete(message.id);
+              if (typeof entry.handlers.onClose === "function") {
+                entry.handlers.onClose(
+                  message.error || "the socket could not open",
+                  1006,
+                );
+              }
+            }
+          } else if (message.type === "anth:ws-message") {
+            const entry = sockets.get(message.id);
+            if (!entry) return;
+            let consumed = null;
+            if (message.data && typeof entry.handlers.onMessage === "function") {
+              consumed = entry.handlers.onMessage(message.data);
+            } else if (
+              typeof message.text === "string" &&
+              typeof entry.handlers.onText === "function"
+            ) {
+              consumed = entry.handlers.onText(message.text);
+            }
+            // The acknowledgement is what lets the panel release the next
+            // frame; a handler that throws must still not stall the socket.
+            Promise.resolve(consumed).finally(() => {
+              send("anth:ws-ack", { id: message.id });
+            });
+          } else if (message.type === "anth:ws-close") {
+            const entry = sockets.get(message.id);
+            if (!entry) return;
+            sockets.delete(message.id);
+            if (typeof entry.handlers.onClose === "function") {
+              entry.handlers.onClose(message.reason || undefined, message.code);
+            }
+          } else if (message.type === "anth:open-view-result") {
+            const resolve = pendingViews.get(message.requestId);
+            if (!resolve) return;
+            pendingViews.delete(message.requestId);
+            resolve(message.ok === true);
+          } else if (message.type === "anth:open-modal-result") {
+            const resolve = pendingModals.get(message.requestId);
+            if (!resolve) return;
+            pendingModals.delete(message.requestId);
+            resolve(message.ok === true);
+          } else if (message.type === "anth:focus") {
+            const target = lastFocused;
+            window.focus();
+            // The panel has just handed focus back to the frame; wait for that
+            // focus transfer before focusing the inner control.
+            window.setTimeout(() => {
+              if (target?.isConnected) target.focus();
+            }, 0);
+          } else if (message.type === "anth:action") {
+            for (const handler of actionHandlers) {
+              try {
+                handler(message.tag, message.payload);
+              } catch {
+                // One view listener must not break the others.
+              }
+            }
+          } else if (message.type === "anth:update-params") {
+            if (typeof moduleApi?.onParams === "function") {
+              moduleApi.onParams(message.params);
+            }
+          } else if (message.type === "anth:request-close") {
+            let ok = true;
+            try {
+              if (typeof moduleApi?.beforeClose === "function") {
+                send("anth:close-pending", {
+                  requestId: message.requestId,
+                });
+                ok = (await moduleApi.beforeClose()) !== false;
+              }
+            } catch {
+              ok = false;
+            }
+            send("anth:close-result", {
+              requestId: message.requestId,
+              ok,
+            });
+          } else if (message.type === "anth:request-snapshot") {
+            let value = null;
+            try {
+              if (typeof moduleApi?.snapshot === "function") {
+                value = (await moduleApi.snapshot()) ?? null;
+              }
+            } catch {
+              value = null;
+            }
+            send("anth:snapshot-result", {
+              requestId: message.requestId,
+              value,
+            });
+          } else if (message.type === "anth:unmount") {
+            try {
+              for (const id of sockets.keys()) send("anth:ws-close", { id });
+              sockets.clear();
+              actionHandlers.clear();
+              if (typeof dispose === "function") await dispose();
+            } finally {
+              dispose = null;
+              moduleApi = null;
+              document.body.replaceChildren();
+            }
+          }
+        });
+
+        if (typeof ResizeObserver === "function") {
+          new ResizeObserver(report).observe(document.body);
+        }
+        send("anth:frame-ready");
+      })();
+    </script>
+  </body>
+</html>

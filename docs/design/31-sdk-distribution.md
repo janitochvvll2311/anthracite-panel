@@ -35,16 +35,15 @@ bunx @anth-panel/cli app new org.example.notes --lang bun
 | `@anth-panel/wit` | npm | versioned WIT catalog | yes |
 | `@anth-panel/cli` | npm | `bunx @anth-panel/cli` | yes |
 | `@anth-panel/create-app` | npm | `bun create @anth-panel/app` | scaffolding |
-| `@anth-panel/bun-plugin` | npm | preload hooks for dev/build | experimental |
+| `@anth-panel/bun-plugin` | npm | explicit `Bun.build` plugin for `anth:client` | experimental |
 | `anth-sign`, `anth-conformance` | GitHub Releases | offline signing and verification | binaries |
 
 The owner is **`anth-panel`**: crates.io ownership and the npm scope
 `@anth-panel`.
 
-The workspace packages are still named `@anthracite/panel` and
-`@anthracite/client` with `private: true`. They are the same artifacts as
-`@anth-panel/panel` and `@anth-panel/client`; the rename happens in the npm phase,
-before the first publish.
+The workspace packages are named `@anth-panel/panel` and
+`@anth-panel/client`; the npm phase removes `private`, builds ESM plus
+declarations and publishes those same artifacts.
 
 The scoped names are the canonical ones. Do not publish unscoped `anth-*`
 packages at launch: `anth-*` is a textual prefix, not a namespace, so anyone
@@ -81,8 +80,8 @@ Bun has no subcommand registry. The integration is the Drizzle-shaped one:
 
 - `bunx @anth-panel/cli ...` runs the CLI;
 - `bun create @anth-panel/app` scaffolds a project;
-- `bunfig.toml` can preload `@anth-panel/bun-plugin` for virtual `anth:client`
-  modules, WIT transforms or panel HMR.
+- `Bun.build({ plugins: [anthPlugin()] })` resolves the virtual `anth:client`
+  module. Bun 1.4.4 does not apply preload plugins to build resolution.
 
 A native `bun anth` subcommand is not attempted: Bun would have to provide the
 extension point, and a shell alias is not a distribution story.

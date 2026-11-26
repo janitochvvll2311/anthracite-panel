@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Contribution } from "@anthracite/panel";
+import type { Contribution } from "@anth-panel/panel";
 
 import { defaultView } from "./defaults";
 

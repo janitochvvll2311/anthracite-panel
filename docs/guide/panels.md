@@ -8,7 +8,7 @@ platform feature. Our official panel is one implementation; the second panel in
 
 ## The contract
 
-`@anthracite/panel` owns the vocabulary:
+`@anth-panel/panel` owns the vocabulary:
 
 | Export | Meaning |
 | --- | --- |
@@ -36,7 +36,7 @@ and every route it calls goes through a scoped RPC that accepts only the app's
 own `/api/apps/{id}/` prefix.
 
 ```ts
-import { assetUrl, mountFrame, ordered } from "@anthracite/panel";
+import { assetUrl, mountFrame, ordered } from "@anth-panel/panel";
 
 const [contribution] = ordered(surface.apps, "panel.view");
 const host = document.querySelector("#view") as HTMLElement;
@@ -88,8 +88,8 @@ the cookie, and mounts `panel.view` contributions. See
 
 ## Building a panel
 
-1. Take `@anthracite/panel` as a dependency (the workspace source is
-   `sdk/ts/panel`; it is not published to a registry).
+1. Take `@anth-panel/panel` as a dependency (`bun add @anth-panel/panel`; the
+   workspace source is `sdk/ts/panel`).
 2. Fetch `GET /api/engine/composition` and read `surface.apps`.
 3. Pick the slots you implement; render `ordered(apps, slot)`.
 4. Mount each contribution with `mountFrame`; pass a `request` adapter if your

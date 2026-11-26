@@ -1,0 +1,32 @@
+{
+  "name": "@anth-panel/bun-plugin",
+  "version": "0.8.0",
+  "type": "module",
+  "description": "Bun build plugin for the Anthracite virtual anth:client module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/janitochvvll2311/anthracite-panel"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "bun build src/index.ts --outfile dist/index.js --format esm --target bun && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@anth-panel/client": "file:../client",
+    "typescript": "5.6.3"
+  },
+  "peerDependencies": {
+    "@anth-panel/client": "0.8.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
