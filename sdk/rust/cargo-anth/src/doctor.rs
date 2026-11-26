@@ -59,20 +59,10 @@ fn report(name: &str, path: Option<&str>, required: bool, missing: &mut Vec<Stri
     }
 }
 
-/// Rustup is authoritative; the sysroot check keeps a non-rustup install honest.
+/// Ask the configured rustc, not the active rustup: RUSTC may point at another
+/// toolchain. rustc --print target-libdir returns a path even when the target is
+/// absent, so the libdir must actually contain its libstd.
 fn target_installed(rustc: &str, target: &str) -> bool {
-    if let Some(rustup) = find_tool("RUSTUP", "rustup") {
-        if let Ok(output) = Command::new(rustup)
-            .args(["target", "list", "--installed"])
-            .output()
-        {
-            if output.status.success() {
-                return String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .any(|line| line.trim() == target);
-            }
-        }
-    }
     target_libdir_has_std(rustc, target)
 }
 

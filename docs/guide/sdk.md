@@ -23,7 +23,7 @@ Bun:
 
 ```sh
 bunx @anth-panel/cli app new org.example.notes --lang bun
-# o, equivalente:
+# or, equivalently:
 bunx @anth-panel/create-app org.example.notes
 
 cd notes
