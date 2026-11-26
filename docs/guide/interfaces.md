@@ -1,4 +1,4 @@
-# Interface reference (v0.7.0)
+# Interface reference (v0.8.0)
 
 The five edge services export one WIT package each. The types below are a
 summary; the authoritative record is the `.wit` file in the bundle, and that is

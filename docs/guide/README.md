@@ -77,7 +77,7 @@ edge composition in [`compositions/edge.toml`](../../compositions/edge.toml).
   pass `--socket <path>` when the engine does not use the default
   `/run/anth/engine.sock`.
 - `$state` is the engine's state directory (default `/var/lib/anth`).
-- `0.7.x` means the 0.7 release line; the exact version is `anth --version`.
+- `0.8.x` means the 0.8 release line; the exact version is `anth --version`.
 - Links into [`docs/design/`](../design/) explain a reason. If this guide and a
   design decision disagree, the design decision wins and the guide is wrong:
   report it.
