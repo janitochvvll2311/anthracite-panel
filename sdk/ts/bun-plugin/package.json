@@ -2,7 +2,7 @@
   "name": "@anth-panel/bun-plugin",
   "version": "0.8.0",
   "type": "module",
-  "description": "Bun preload plugin for Anthracite virtual client modules",
+  "description": "Bun build plugin for the Anthracite virtual anth:client module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
