@@ -54,9 +54,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-bundle"
+version = "0.8.0"
+dependencies = [
+ "anth-error",
+ "base64",
+ "ed25519-dalek",
+ "sha2 0.10.9",
+ "zip",
+]
+
+[[package]]
 name = "anth-compose"
 version = "0.8.0"
 dependencies = [
+ "anth-bundle",
  "anth-contract",
  "base64",
  "ed25519-dalek",
@@ -72,6 +84,8 @@ dependencies = [
 name = "anth-contract"
 version = "0.8.0"
 dependencies = [
+ "anth-bundle",
+ "anth-error",
  "humantime",
  "semver",
  "serde",
@@ -98,6 +112,14 @@ dependencies = [
  "socket2",
  "tokio",
  "toml 1.2.1+spec-1.1.0",
+]
+
+[[package]]
+name = "anth-error"
+version = "0.8.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

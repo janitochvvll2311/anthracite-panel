@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["auth", "contract", "runtime", "api", "daemon", "compose"]
+members = ["auth", "contract", "runtime", "api", "daemon", "compose", "error", "bundle"]
 
 [workspace.package]
 version = "0.8.0"

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anth_contract::{Error, ErrorEnvelope, ErrorKind};
+use anth_error::{Error, ErrorEnvelope, ErrorKind};
 use futures_core::Stream;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

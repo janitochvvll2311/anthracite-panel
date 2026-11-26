@@ -7,9 +7,10 @@
 //   panel/*   may not depend on engine/* directly: it goes through the SDK
 //   apps/*    may not depend on sdk/rust/panel: that crate is for panels
 //
-// plus "engine/contract depends on nothing we own", because it is the base
-// everything else builds on. A workspace that does not exist yet is skipped, so
-// the check grows with the repository instead of failing on day one.
+// plus "engine/contract depends on nothing we own", with one exception: the two
+// pure primitives `engine/error` and `engine/bundle`, which the contract
+// re-exports. A workspace that does not exist yet is skipped, so the check
+// grows with the repository instead of failing on day one.
 //
 // Run from anywhere: `bun scripts/check-edges.mjs`.
 
@@ -106,9 +107,13 @@ for (const pkg of packages) {
       );
     }
     if (manifest === "engine/contract/Cargo.toml") {
-      violations.push(
-        `${pkg.name} -> ${dep.name} (${rel(target)}): the contract is the base and depends on nothing we own`,
-      );
+      const primitive =
+        rel(target) === "engine/error" || rel(target) === "engine/bundle";
+      if (!primitive) {
+        violations.push(
+          `${pkg.name} -> ${dep.name} (${rel(target)}): the contract is the base and depends only on the error/bundle primitives`,
+        );
+      }
     }
   }
 }

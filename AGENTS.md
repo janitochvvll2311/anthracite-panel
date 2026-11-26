@@ -55,7 +55,8 @@ Four Rust workspaces and three Bun ones. They are separate on purpose: a
 dependency that should not exist becomes unrepresentable instead of discouraged.
 
 - `engine/` — the platform: `contract`, `runtime`, `compose`, `auth`, `api`,
-  `daemon`. Builds `anth-engine`, the headless daemon.
+  `daemon`, `error` and `bundle`. Builds `anth-engine`; `error` and `bundle`
+  are the small public crates the SDK tools share.
 - `sdk/rust/` — `guest` (wasm apps), `panel` (panels), `client` (generated
   HTTP/CLI clients), `cli` (the `anth` commands), `service` (native services),
   `conformance` and `signer` (the offline tools), `cargo-anth` (the app developer
@@ -89,6 +90,9 @@ scripts/acid-test.sh
 
 # the SDK CLI gate: a project in /tmp builds, signs and verifies
 scripts/sdk-cli-test.sh
+
+# package/dry-run/publish the public Rust SDK in dependency order
+scripts/release-sdk.sh --check
 
 # browser e2e against a running panel (tests/e2e/README.md)
 (cd tests/e2e && bun install)

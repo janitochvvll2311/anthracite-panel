@@ -3,10 +3,14 @@ name = "anth-service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+readme = "README.md"
+keywords = ["anthracite", "service", "sdk"]
+categories = ["development-tools"]
+repository = "https://github.com/janitochvvll2311/anthracite-panel"
 description = "The native service side of the engine's private WIT-RPC protocol"
 
 [dependencies]
-anth-contract = { path = "../../../engine/contract" }
+anth-error = { version = "0.8.0", path = "../../../engine/error" }
 base64 = "0.22"
 futures-core = "0.3"
 futures-util = "0.3"

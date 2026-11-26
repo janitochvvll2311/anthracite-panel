@@ -8,12 +8,10 @@ pub mod audit;
 pub mod catalog;
 pub mod composition;
 pub mod descriptor;
-pub mod error;
 pub mod grant;
 pub mod id;
 pub mod key;
 pub mod manifest;
-pub mod signature;
 pub mod view;
 pub mod world;
 
@@ -21,7 +19,15 @@ pub use audit::{AuditAction, AuditEntry, Outcome};
 pub use catalog::{is_native, risk_of, NativeInterface, Risk, NATIVE};
 pub use composition::{Composition, Profile, COMPOSITION_VERSION};
 pub use descriptor::{Descriptor, Tier, DESCRIPTOR_VERSION};
-pub use error::{Error, ErrorEnvelope, ErrorKind};
+// The error model and the canonical signed message live in the small public
+// crates; the contract re-exports them so existing paths keep working.
+pub mod error {
+    pub use anth_error::*;
+}
+pub mod signature {
+    pub use anth_bundle::message::*;
+}
+pub use anth_error::{Error, ErrorEnvelope, ErrorKind};
 pub use grant::{Grant, GRANT_VERSION};
 pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};
 pub use key::{KeyAlgorithm, TrustedKey, KEY_VERSION};

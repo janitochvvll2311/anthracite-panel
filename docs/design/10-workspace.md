@@ -10,7 +10,9 @@ discouraged.
 engine/                    Rust workspace: the platform
   Cargo.toml
   wit/                     anth:env, anth:store, anth:error
-  contract/                manifest, composition, grants, errors (no I/O)
+  contract/                manifest, composition, grants (no I/O)
+  error/                   the error kind and envelope (no I/O)
+  bundle/                  canonical signed message, hashes, zip unpack, Ed25519
   runtime/                 the only crate that names wasmtime; world checks
   broker/                  host interface dispatch, quotas, denials
   compose/                 registry, grant store, resolver, surface projection
@@ -82,8 +84,10 @@ forbidden:  engine/*      -> sdk, panel, apps
 forbidden:  apps/*        -> sdk/rust/panel
 ```
 
-`engine/contract` has no dependencies on the rest of the engine; everything else
-depends on it. That direction is the architecture.
+`engine/contract` has no dependencies on the rest of the engine except the two
+pure primitives it re-exports: `engine/error` (the error model) and
+`engine/bundle` (the canonical signed message). Everything else depends on the
+contract. That direction is the architecture.
 
 The edges are checked in CI with `cargo metadata` and fail the build. A rule that
 only lives in a document is a rule that will be broken.

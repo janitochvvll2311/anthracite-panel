@@ -1,0 +1,26 @@
+[package]
+name = "anth-bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The canonical bundle message, hashes and Ed25519 signature primitives"
+repository = "https://github.com/janitochvvll2311/anthracite-panel"
+readme = "README.md"
+keywords = ["anthracite", "wasm", "bundle", "signature"]
+categories = ["development-tools"]
+
+[features]
+default = ["message", "signature", "unpack"]
+# The canonical signed message and the WIT/file hash framing. No curve or zip.
+message = []
+# Ed25519 verification of a signature.
+signature = ["dep:base64", "dep:ed25519-dalek", "dep:sha2"]
+# A confined zip unpack with caps, used by the engine and the conformance kit.
+unpack = ["dep:zip"]
+
+[dependencies]
+anth-error = { version = "0.8.0", path = "../error" }
+base64 = { version = "0.22", optional = true }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"], optional = true }
+sha2 = { version = "0.10", optional = true }
+zip = { version = "2.6", default-features = false, features = ["deflate"], optional = true }
