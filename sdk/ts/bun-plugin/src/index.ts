@@ -1,6 +1,6 @@
-// A Bun plugin for the developer workflow. It resolves the virtual
-// `anth:client` module the generated app code imports; a preload can register
-// it once with `Bun.plugin(anthPlugin())`.
+// A Bun build plugin for the developer workflow. Pass it to
+// `Bun.build({ plugins: [anthPlugin()] })` to resolve the virtual `anth:client`
+// module the generated app code imports.
 
 export interface AnthBuild {
   onResolve(
