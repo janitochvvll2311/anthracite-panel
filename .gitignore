@@ -11,6 +11,12 @@ frontend/dist
 !apps/*/frontend/dist/
 !apps/*/frontend/dist/*.js
 panel/frontend/dist
+!sdk/ts/panel/dist/
+!sdk/ts/panel/dist/*
+!sdk/ts/client/dist/
+!sdk/ts/client/dist/*
+!sdk/ts/bun-plugin/dist/
+!sdk/ts/bun-plugin/dist/*
 *.log
 .DS_Store
 

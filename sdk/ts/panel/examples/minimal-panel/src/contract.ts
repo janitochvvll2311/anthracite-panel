@@ -8,7 +8,7 @@ import {
   ordered,
   type App,
   type Contribution,
-} from "@anthracite/panel";
+} from "@anth-panel/panel";
 
 export function visibleViews(apps: App[]): Contribution[] {
   return ordered(apps, VIEW).filter(

@@ -1,5 +1,5 @@
 // The second panel. It knows only the SDK: it reads the composition, filters
-// `panel.view`, orders and mounts the contributions with @anthracite/panel, and
+// `panel.view`, orders and mounts the contributions with @anth-panel/panel, and
 // implements a tab that can be detached. It never imports the official panel or
 // any app.
 
@@ -16,7 +16,7 @@ import {
   safeDispose,
   type App,
   type Contribution,
-} from "@anthracite/panel";
+} from "@anth-panel/panel";
 
 import { ignoredViews, visibleViews } from "./contract";
 

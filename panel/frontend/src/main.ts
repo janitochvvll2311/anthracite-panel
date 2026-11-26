@@ -33,7 +33,7 @@ import {
   type FrameHandle,
   type OpenModalRequest,
   type OpenViewRequest,
-} from "@anthracite/panel";
+} from "@anth-panel/panel";
 
 import {
   VIEWPORT_KEY,

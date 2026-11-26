@@ -1,4 +1,4 @@
-import type { Contribution } from "@anthracite/panel";
+import type { Contribution } from "@anth-panel/panel";
 
 /// The view the panel opens on first boot: Home, if a visible Home slot exists.
 ///

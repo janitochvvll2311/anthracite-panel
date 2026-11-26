@@ -41,10 +41,9 @@ bunx @anth-panel/cli app new org.example.notes --lang bun
 The owner is **`anth-panel`**: crates.io ownership and the npm scope
 `@anth-panel`.
 
-The workspace packages are still named `@anthracite/panel` and
-`@anthracite/client` with `private: true`. They are the same artifacts as
-`@anth-panel/panel` and `@anth-panel/client`; the rename happens in the npm phase,
-before the first publish.
+The workspace packages are named `@anth-panel/panel` and
+`@anth-panel/client`; the npm phase removes `private`, builds ESM plus
+declarations and publishes those same artifacts.
 
 The scoped names are the canonical ones. Do not publish unscoped `anth-*`
 packages at launch: `anth-*` is a textual prefix, not a namespace, so anyone

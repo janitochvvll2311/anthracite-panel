@@ -1,6 +1,6 @@
 # Second panel
 
-A deliberately small panel written against `@anthracite/panel` only. It is the
+A deliberately small panel written against `@anth-panel/panel` only. It is the
 M3 acid test: it implements `panel.view`, renders whatever app contributes a
 view, and can detach a view into a floating pane. It does not import the official
 panel or any app.

@@ -4,7 +4,7 @@
 //
 // The panel talks HTTP to an existing panel/engine. That transport is a detail;
 // the contract, ordering, asset URLs and the sandboxed iframe come from
-// @anthracite/panel.
+// @anth-panel/panel.
 
 import { loopbackTarget } from "./src/target";
 
@@ -51,7 +51,7 @@ async function login(): Promise<string> {
 
 let sessionCookie = await login();
 const appFrameUrl = new URL(
-  import.meta.resolve("@anthracite/panel/app-frame.html"),
+  import.meta.resolve("@anth-panel/panel/app-frame.html"),
 );
 
 const SHELL_CSP =

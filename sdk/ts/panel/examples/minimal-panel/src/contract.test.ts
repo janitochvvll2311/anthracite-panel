@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { VIEW, ACTION, type App, type Slot } from "@anthracite/panel";
+import { VIEW, ACTION, type App, type Slot } from "@anth-panel/panel";
 import { ignoredViews, visibleViews } from "./contract";
 
 function slot(id: string, tag: string, order: number): Slot {

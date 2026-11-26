@@ -1,14 +1,31 @@
 {
-  "name": "@anthracite/panel",
+  "name": "@anth-panel/panel",
   "version": "0.8.0",
-  "private": true,
   "type": "module",
-  "description": "The panel contract: slots, contribution order and asset URLs",
-  "exports": {
-    ".": "./src/index.ts",
-    "./app-frame.html": "./src/app-frame.html"
+  "description": "The Anthracite panel contract: slots, contribution order and asset URLs",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/janitochvvll2311/anthracite-panel"
   },
+  "homepage": "https://github.com/janitochvvll2311/anthracite-panel",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./app-frame.html": "./dist/app-frame.html"
+  },
+  "files": ["dist", "README.md"],
   "scripts": {
-    "test": "bun test src"
+    "build": "bun build src/index.ts --outfile dist/index.js --format esm --target browser && tsc -p tsconfig.build.json && cp src/app-frame.html dist/",
+    "test": "bun test src",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

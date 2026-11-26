@@ -1,0 +1,18 @@
+export * from "./iframe";
+export * from "./dom";
+export * from "./stream";
+export * from "./testids";
+import type { App, Contribution } from "./model";
+export type { App, Contribution, FabAction, Slot } from "./model";
+export declare const VIEW = "panel.view";
+export declare const ACTION = "panel.action";
+export declare const SETTINGS = "panel.settings";
+export declare const FAB = "panel.fab";
+export declare const MODAL = "panel.modal";
+export declare const REFRESH = "refresh";
+export declare const PORTABLE: readonly ["panel.view", "panel.action", "panel.settings", "panel.fab", "panel.modal"];
+export declare function contributionKey(contribution: Contribution): string;
+export declare function encodeModule(module: string): string;
+export declare function assetUrl(contribution: Contribution): string;
+export declare function ordered(apps: App[], slot: string): Contribution[];
+export declare function ignored(apps: App[], implemented: readonly string[]): Contribution[];

@@ -4,7 +4,7 @@
 // and may only call their own `/api/apps/{id}/` prefix; managing the engine is
 // the host's job and uses the same session as the rest of the shell.
 
-import { TESTID } from "@anthracite/panel";
+import { TESTID } from "@anth-panel/panel";
 
 import { authorityDiff, RISKS, type Risk } from "./authority";
 

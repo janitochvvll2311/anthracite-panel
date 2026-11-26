@@ -1,0 +1,25 @@
+{
+  "name": "@anth-panel/wit",
+  "version": "0.8.0",
+  "type": "module",
+  "description": "The versioned Anthracite host WIT catalog",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/janitochvvll2311/anthracite-panel"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./wit/*": "./wit/*"
+  },
+  "files": ["index.js", "index.d.ts", "wit", "README.md"],
+  "scripts": {
+    "build": "rm -rf wit && mkdir -p wit && cp -R ../../rust/guest/wit/deps wit/deps"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@anthracite/panel": "file:../../sdk/ts/panel"
+    "@anth-panel/panel": "file:../../sdk/ts/panel"
   },
   "scripts": {
     "build": "bun build src/main.ts --outdir dist --target browser && cp src/index.html src/style.css src/favicon.svg ../../sdk/ts/panel/src/app-frame.html dist/",

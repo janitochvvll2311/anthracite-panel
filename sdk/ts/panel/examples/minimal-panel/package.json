@@ -2,9 +2,9 @@
   "name": "anth-minimal-panel",
   "private": true,
   "type": "module",
-  "description": "A second panel written against @anthracite/panel only",
+  "description": "A second panel written against @anth-panel/panel only",
   "dependencies": {
-    "@anthracite/panel": "file:../.."
+    "@anth-panel/panel": "file:../.."
   },
   "scripts": {
     "build": "bun build src/main.ts --outdir dist --target browser && cp src/index.html src/style.css dist/",

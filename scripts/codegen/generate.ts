@@ -343,14 +343,27 @@ export function generate(appDir: string, catalog: string): Generation {
   const tsTransport = `${header}\n/** An HTTP request adapter: UDS (HTTP over the socket), TCP, or fetch. */\nexport type Transport = (method: string, path: string, body?: string) => Promise<string>;\n`;
   const tsPackage = `${JSON.stringify(
     {
-      name: "@anthracite/client",
+      name: "@anth-panel/client",
       version,
-      private: true,
       type: "module",
       description: "Generated clients for Anthracite apps",
-      exports: { ".": "./src/index.ts" },
-      scripts: { test: "bun test", typecheck: "tsc --noEmit" },
+      license: "Apache-2.0",
+      repository: {
+        type: "git",
+        url: "https://github.com/janitochvvll2311/anthracite-panel",
+      },
+      exports: {
+        ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+      },
+      files: ["dist", "README.md"],
+      scripts: {
+        build:
+          "bun build src/index.ts --outfile dist/index.js --format esm --target browser && tsc -p tsconfig.build.json",
+        test: "bun test",
+        typecheck: "tsc --noEmit",
+      },
       devDependencies: { typescript: "5.6.3" },
+      publishConfig: { access: "public" },
     },
     null,
     2,

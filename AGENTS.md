@@ -94,6 +94,9 @@ scripts/sdk-cli-test.sh
 # package/dry-run/publish the public Rust SDK in dependency order
 scripts/release-sdk.sh --check
 
+# build/pack/publish the @anth-panel npm packages
+scripts/release-npm.sh --check
+
 # browser e2e against a running panel (tests/e2e/README.md)
 (cd tests/e2e && bun install)
 (cd tests/e2e && ANTH_PANEL_URL=http://127.0.0.1:5173 ANTH_PANEL_PASSWORD=... bun run test)

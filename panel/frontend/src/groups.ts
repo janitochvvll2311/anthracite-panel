@@ -1,4 +1,4 @@
-import { contributionKey, type Contribution } from "@anthracite/panel";
+import { contributionKey, type Contribution } from "@anth-panel/panel";
 
 /// One top-level tab: the parent view plus the child views grouped under it.
 export type ViewGroup = {
