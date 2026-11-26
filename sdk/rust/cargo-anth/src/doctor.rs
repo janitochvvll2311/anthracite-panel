@@ -5,13 +5,15 @@ use std::process::Command;
 
 use anyhow::{bail, Result};
 
+use crate::project::find_tool;
+
 pub fn run() -> Result<()> {
-    let cargo = tool("CARGO", "cargo");
-    let rustc = tool("RUSTC", "rustc");
-    let wasm_tools = tool("WASM_TOOLS", "wasm-tools");
-    let bun = tool("BUN", "bun");
-    let signer = tool("ANTH_SIGN", "anth-sign");
-    let conformance = tool("ANTH_CONFORMANCE", "anth-conformance");
+    let cargo = find_tool("CARGO", "cargo");
+    let rustc = find_tool("RUSTC", "rustc");
+    let wasm_tools = find_tool("WASM_TOOLS", "wasm-tools");
+    let bun = find_tool("BUN", "bun");
+    let signer = find_tool("ANTH_SIGN", "anth-sign");
+    let conformance = find_tool("ANTH_CONFORMANCE", "anth-conformance");
 
     let target = "wasm32-unknown-unknown";
     let target_ok = rustc
@@ -23,7 +25,7 @@ pub fn run() -> Result<()> {
     report("rustc", rustc.as_deref(), true, &mut missing);
     report(
         &format!("target {target}"),
-        target_ok.then_some(target),
+        target_ok.then_some(""),
         true,
         &mut missing,
     );
@@ -47,8 +49,7 @@ pub fn run() -> Result<()> {
 
 fn report(name: &str, path: Option<&str>, required: bool, missing: &mut Vec<String>) {
     match (path, required) {
-        (Some(path), _) if path == name => println!("ok      {name}"),
-        (Some("wasm32-unknown-unknown"), _) => println!("ok      {name}"),
+        (Some(""), _) => println!("ok      {name}"),
         (Some(path), _) => println!("ok      {name} ({path})"),
         (None, true) => {
             println!("missing {name}");
@@ -58,39 +59,35 @@ fn report(name: &str, path: Option<&str>, required: bool, missing: &mut Vec<Stri
     }
 }
 
-fn tool(env: &str, name: &str) -> Option<String> {
-    if let Ok(value) = std::env::var(env) {
-        if !value.is_empty() {
-            return Some(value);
-        }
-    }
-    if let Some(path) = find_in_path(name) {
-        return Some(path);
-    }
-    let fallback = format!("/tools/cargo/bin/{name}");
-    if Path::new(&fallback).is_file() {
-        return Some(fallback);
-    }
-    None
-}
-
-fn find_in_path(name: &str) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-    None
-}
-
+/// Rustup is authoritative; the sysroot check keeps a non-rustup install honest.
 fn target_installed(rustc: &str, target: &str) -> bool {
-    Command::new(rustc)
-        .arg("--print")
-        .arg("target-libdir")
-        .arg("--target")
-        .arg(target)
+    if let Some(rustup) = find_tool("RUSTUP", "rustup") {
+        if let Ok(output) = Command::new(rustup)
+            .args(["target", "list", "--installed"])
+            .output()
+        {
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .any(|line| line.trim() == target);
+            }
+        }
+    }
+    let Ok(output) = Command::new(rustc)
+        .args(["--print", "target-libdir", "--target", target])
         .output()
-        .is_ok_and(|output| output.status.success())
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    std::fs::read_dir(Path::new(&path)).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("libstd-") && name.ends_with(".rlib")
+        })
+    })
 }

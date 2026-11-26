@@ -370,24 +370,29 @@ fn unzip(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-fn tool(env: &str, name: &str) -> Result<String> {
+/// Finds a tool from an environment override, PATH, or the /tools fallbacks.
+pub(crate) fn find_tool(env: &str, name: &str) -> Option<String> {
     if let Ok(value) = std::env::var(env) {
         if !value.is_empty() {
-            return Ok(value);
+            return Some(value);
         }
     }
     if let Some(path) = find_in_path(name) {
-        return Ok(path);
+        return Some(path);
     }
-    for fallback in [
-        format!("/tools/cargo/bin/{name}"),
-        format!("/tools/bun/bin/{name}"),
-    ] {
-        if Path::new(&fallback).is_file() {
-            return Ok(fallback);
+    for dir in ["/tools/cargo/bin", "/tools/bun/bin"] {
+        let candidate = Path::new(dir).join(name);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
         }
     }
-    bail!("`{name}` is not on PATH; set {env} or install the toolchain")
+    None
+}
+
+pub(crate) fn tool(env: &str, name: &str) -> Result<String> {
+    find_tool(env, name).ok_or_else(|| {
+        anyhow::anyhow!("`{name}` is not on PATH; set {env} or install the toolchain")
+    })
 }
 
 fn find_in_path(name: &str) -> Option<String> {

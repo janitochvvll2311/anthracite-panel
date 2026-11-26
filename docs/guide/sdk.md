@@ -23,7 +23,9 @@ Bun:
 
 ```sh
 bun add @anth-panel/panel @anth-panel/client
+# choose one:
 bunx @anth-panel/cli app new org.example.notes --lang bun
+# or
 bunx @anth-panel/create-app org.example.notes
 ```
 
