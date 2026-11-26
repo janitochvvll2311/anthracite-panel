@@ -8,7 +8,9 @@
 # anthracite-<version>-<variant>.tar.gz.
 #
 # Authentication: `skopeo login ghcr.io` first (a token with write:packages).
-# `--public` also flips both GHCR packages to public visibility with `gh api`.
+# `--public` tries to flip both GHCR packages to public visibility with
+# `gh api`. GitHub refuses that call for many token types (404), so the script
+# prints the settings URL instead of failing after the images were pushed.
 set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 cd "$root"
@@ -55,9 +57,13 @@ push demo-sessions anthracite-demo main
 if [ "$make_public" = 1 ]; then
     command -v gh >/dev/null 2>&1 || { echo "gh is needed for --public" >&2; exit 2; }
     for package in anthracite-panel anthracite-demo; do
-        gh api -X PATCH "/user/packages/container/$package" \
-            -f visibility=public >/dev/null
-        echo "ghcr: $package is public"
+        if gh api -X PATCH "/user/packages/container/$package" \
+            -f visibility=public >/dev/null 2>&1; then
+            echo "ghcr: $package is public"
+        else
+            echo "ghcr: could not change $package visibility from the API" >&2
+            echo "      set it to Public at https://github.com/users/$owner/packages/container/$package/settings" >&2
+        fi
     done
 fi
 
