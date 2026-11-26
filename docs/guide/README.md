@@ -20,7 +20,7 @@ when the packages are published.
 → [CLI](cli.md) / [HTTP API](http-api.md) → [Signing](signing.md) →
 [Operations](operations.md) → [Troubleshooting](troubleshooting.md).
 
-**App author.** [Apps](apps.md) → [Signing](signing.md) →
+**App author.** [App SDK](sdk.md) → [Apps](apps.md) → [Signing](signing.md) →
 [Services](services.md) if the app needs host reach → [Panels](panels.md) for a
 UI → the [conformance kit](apps.md#the-conformance-kit).
 
@@ -44,6 +44,7 @@ UI → the [conformance kit](apps.md#the-conformance-kit).
 | [CLI](cli.md) | every `anth` command, flags, exit codes |
 | [HTTP API](http-api.md) | authentication, errors, resources, streaming and assets |
 | [Apps](apps.md) | bundle layout, manifests, WIT, routes, slots, approval, upgrades |
+| [App SDK](sdk.md) | cargo anth, bunx, anth.toml, templates, compatibility and troubleshooting |
 | [Services](services.md) | native services, classes, placeholders, supervision, sandbox |
 | [Signing](signing.md) | tiers, keys, `anth-sign`, the release ceremony, verification |
 | [Panels](panels.md) | the panel contract, slots, the iframe bridge, building a panel |

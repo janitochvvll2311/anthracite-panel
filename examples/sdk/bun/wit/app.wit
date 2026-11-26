@@ -1,0 +1,9 @@
+package example:sdk-bun@0.1.0;
+
+interface api {
+    ping: func() -> string;
+}
+
+world app {
+    export api;
+}
