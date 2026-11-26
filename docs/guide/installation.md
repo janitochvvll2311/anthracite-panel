@@ -45,20 +45,20 @@ The four variants are also published as Docker-compatible images
 
 | Image | User | Ports | Notes |
 | --- | --- | --- | --- |
-| `anthracite-core:0.7.0` | 1000 | 8090 | no apps |
-| `anthracite-base:0.7.0` | root | 8090 | real services; `nft` is not in the image |
-| `anthracite-demo:0.7.0` | 1000 | 8090 | the eight emulated system apps |
-| `anthracite-demo-sessions:0.7.0` | 1000 | 8091, 8100-8199 | Turnstile variables required |
+| `anthracite-core:0.8.0` | 1000 | 8090 | no apps |
+| `anthracite-base:0.8.0` | root | 8090 | real services; `nft` is not in the image |
+| `anthracite-demo:0.8.0` | 1000 | 8090 | the eight emulated system apps |
+| `anthracite-demo-sessions:0.8.0` | 1000 | 8091, 8100-8199 | Turnstile variables required |
 
 ```sh
-docker load -i anthracite-0.7.0-core.tar.gz
-docker run -p 8090:8090 -v anth-core:/opt/anthracite/state anthracite-core:0.7.0
+docker load -i anthracite-0.8.0-core.tar.gz
+docker run -p 8090:8090 -v anth-core:/opt/anthracite/state anthracite-core:0.8.0
 
 docker run -p 8091:8091 -p 8100-8199:8100-8199 \
   -v anth-sessions:/opt/anthracite/state \
   -e ANTHRACITE_CAPTCHA_SITE_KEY -e ANTHRACITE_CAPTCHA_SECRET \
   -e ANTHRACITE_CAPTCHA_HOSTNAME -e ANTHRACITE_TRUST_PROXY=1 \
-  anthracite-demo-sessions:0.7.0
+  anthracite-demo-sessions:0.8.0
 ```
 
 `base` may need `--cap-add=NET_ADMIN` and an `nft` binary. A bind-mounted state
@@ -74,7 +74,7 @@ take one app without downloading another variant:
 | --- | --- |
 | `system-org.anthracite.<app>.anth` | the signed real system service, the same bundle `base` carries |
 | `demo-org.anthracite.<app>.anth` | the signed host emulator under the same id |
-| `anthracite-0.7.0-bundles.tar.gz` | every signed system and emulator bundle with its `SHA256SUMS` |
+| `anthracite-0.8.0-bundles.tar.gz` | every signed system and emulator bundle with its `SHA256SUMS` |
 
 ```sh
 sha256sum -c SHA256SUMS

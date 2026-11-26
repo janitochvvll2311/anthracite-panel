@@ -1,6 +1,6 @@
 # The Anthracite guide
 
-This is the official manual for Anthracite **0.7**. It describes how to install,
+This is the official manual for Anthracite **0.8**. It describes how to install,
 configure and operate the engine and the official panel, how to write apps,
 services and panels, and how to sign and release bundles.
 
@@ -9,10 +9,10 @@ The design of record lives separately: [`DESIGN.md`](../../DESIGN.md) and the
 way, and their decisions are binding. The guide links to them where the reason
 matters; it does not repeat the whole design.
 
-The `v0.8.0` line adds the third-party SDK (`cargo anth` / `anth` and
+The `v0.8.0` release ships the third-party SDK (`cargo anth` / `anth` and
 `bunx @anth-panel/cli`). Its contract is
-[§31](../design/31-sdk-distribution.md); the install commands are documented
-when the packages are published.
+[§31](../design/31-sdk-distribution.md); the install commands are in the
+[App SDK](sdk.md) chapter.
 
 ## Reading paths
 
@@ -53,7 +53,7 @@ UI → the [conformance kit](apps.md#the-conformance-kit).
 | [Security](security.md) | the authority model, secrets, what is and is not enforced |
 | [Troubleshooting](troubleshooting.md) | symptoms, causes, fixes |
 | [Glossary](glossary.md) | the vocabulary used everywhere else |
-| [Release notes](release-notes.md) | 0.7.0 changes, upgrade and limitations |
+| [Release notes](release-notes.md) | 0.8.0 changes, upgrade and limitations |
 | [Edge composition QA](edge-qa.md) | the manual matrix behind the release gate |
 
 ## Edge apps
@@ -77,7 +77,7 @@ edge composition in [`compositions/edge.toml`](../../compositions/edge.toml).
   pass `--socket <path>` when the engine does not use the default
   `/run/anth/engine.sock`.
 - `$state` is the engine's state directory (default `/var/lib/anth`).
-- `0.7.x` means the 0.7 release line; the exact version is `anth --version`.
+- `0.8.x` means the 0.8 release line; the exact version is `anth --version`.
 - Links into [`docs/design/`](../design/) explain a reason. If this guide and a
   design decision disagree, the design decision wins and the guide is wrong:
   report it.

@@ -186,8 +186,8 @@ prerequisites and the sandbox shipped through
 
 ### v0.8.0 — the third-party SDK
 
-> **Contract:** [§31](31-sdk-distribution.md). Status: **in progress**; the
-> packages are not published yet.
+> **Contract:** [§31](31-sdk-distribution.md). Status: **shipped** in
+> `v0.8.0`; the six crates and six `@anth-panel` packages are published.
 
 v0.8.0 turns the public repository into an installable SDK. One Rust CLI
 (`cargo anth` / `anth`) and one npm entry point (`bunx @anth-panel/cli`) create,

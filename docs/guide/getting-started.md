@@ -16,7 +16,7 @@ Unpack one and run its `run.sh`; there is no installer and no daemon setup.
 | `demo-sessions` | the same eight apps, one ephemeral session per browser | `state/sessions/<id>` |
 
 ```sh
-tar -xzf anthracite-0.7.0-core-linux-x86_64.tar.gz
+tar -xzf anthracite-0.8.0-core-linux-x86_64.tar.gz
 cd core
 ./run.sh                       # http://127.0.0.1:8090
 ```

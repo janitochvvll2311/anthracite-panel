@@ -10,20 +10,22 @@ and to the design where the reason matters.
 
 ## State
 
-`v0.7.0` is the last shipped release: manifest v4, sandbox L1 and the port
+`v0.8.0` is the last shipped release, the App SDK: `cargo anth` / `anth` for
+Rust and `bunx @anth-panel/cli` for Bun. The six public crates (`anth-error`,
+`anth-bundle`, `anth-guest`, `anth-service`, `anth-client`, `cargo-anth`) are
+published on crates.io and the six `@anth-panel/*` packages on npm, all at
+`0.8.0`; the four variants, `SHA256SUMS` and the per-app bundles are in the
+`v0.8.0` GitHub Release. The contract is
+`docs/design/31-sdk-distribution.md` and ADRs 0013–0018; the close report is
+`docs/features/app-sdk/report.md`.
+
+`v0.7.0` is the previous release: manifest v4, sandbox L1 and the port
 capability, the broker/audit/surface exports, and the five edge apps (`certs`,
 `acme`, `proxy`, `containers`, `store`). The edge composition is
 `compositions/edge.toml`; the removal matrix is
 `engine/api/tests/golden.rs`; the release gate and manual QA are
-`docs/guide/release-notes.md` and `docs/guide/edge-qa.md`. The close report is
+`docs/guide/release-notes.md` and `docs/guide/edge-qa.md`. Its close report is
 `docs/features/v0-7-0/report.md`.
-
-The `v0.8.0` line is the third-party SDK: `cargo anth` / `anth` for Rust and
-`bunx @anth-panel/cli` for Bun, with publishable crates and npm packages under
-the `anth-panel` owner. The contract is
-`docs/design/31-sdk-distribution.md` and ADRs 0013–0018; the code and release
-scripts are complete, and publication runs on `v0.8.0` after this phase. The
-line branches from `main` after `v0.7.0`.
 
 Previous lines are preserved in the design, the guide and the feature reports;
 their tags are not guaranteed to exist. Do not copy code from an old line.
