@@ -15,4 +15,4 @@ libc = "0.2"
 sha2 = "0.10"
 serde_json = { workspace = true }
 wit-parser = "0.263"
-zip = { version = "2.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
