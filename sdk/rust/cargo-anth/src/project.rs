@@ -350,14 +350,17 @@ fn unzip(from: &Path, to: &Path) -> Result<()> {
         let mut entry = archive.by_index(index)?;
         let raw = entry
             .name()
-            .map(|name| name.into_owned())
-            .unwrap_or_else(|_| "<unknown>".to_string());
+            .map_err(|error| anyhow::anyhow!("reading the entry name: {error}"))?
+            .into_owned();
         let plain = raw.trim_end_matches('/');
         if plain.contains('\\')
             || plain.contains('\0')
-            || plain
-                .split('/')
-                .any(|part| part.is_empty() || part == "." || part == "..")
+            || plain.split('/').any(|part| {
+                let bytes = part.as_bytes();
+                part.is_empty()
+                    || part == "."
+                    || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+            })
         {
             bail!("bundle contains an unsafe path: {raw}");
         }

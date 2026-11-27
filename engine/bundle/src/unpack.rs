@@ -32,12 +32,17 @@ pub fn unpack(root: &Path, bundle: &[u8], max_total: u64) -> Result<(), Error> {
             .map_err(|error| Error::invalid(format!("reading the bundle: {error}")))?;
         let raw = entry
             .name()
-            .map(|name| name.into_owned())
-            .unwrap_or_else(|_| "<unknown>".to_string());
+            .map_err(|error| Error::invalid(format!("reading the entry name: {error}")))?
+            .into_owned();
         let plain = raw.trim_end_matches('/');
         if plain.contains('\\')
             || plain.contains('\0')
-            || plain.split('/').any(|part| part.is_empty() || part == ".")
+            || plain.split('/').any(|part| {
+                let bytes = part.as_bytes();
+                part.is_empty()
+                    || part == "."
+                    || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+            })
         {
             return Err(Error::invalid(format!(
                 "`{raw}` is not a plain path inside the bundle"

@@ -245,8 +245,8 @@ mod tests {
                         .by_index(index)
                         .expect("entry")
                         .name()
-                        .map(|n| n.into_owned())
-                        .unwrap_or_default()
+                        .expect("entry name")
+                        .to_string()
                 })
                 .collect();
             names.sort();
