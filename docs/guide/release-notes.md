@@ -1,5 +1,45 @@
 # Release notes
 
+## 0.8.2 — the security patch
+
+`v0.8.2` is a maintenance release over the 0.8 line. It carries the `v0.8.1`
+store change (already in the images) together with the dependency security fixes
+and the SDK tooling cleanup. No application or contract behaviour changes.
+
+### Security
+
+- **`zip` 9.8.2** (from 2.6.1): closes the zip-cloaking parser differential
+  (critical), the unbounded symlink handling (high) and the AES HMAC advisory
+  (not compiled here: only `deflate` is enabled). Six crates and every lock move
+  together, including `panel/backend`.
+- **`wasmtime` 48.0.10** (from 42.0.2): closes the aarch64 `br_table` target bug
+  and the Cranelift overflow miscompilation. The component API used by the
+  engine needed no changes.
+- **Unpack hardening**: the raw entry name is validated before zip normalises
+  it. `.` and empty components, absolute paths, backslashes and Windows drive
+  prefixes are refused; `..` still reports an escape; a failed entry-name read
+  is propagated instead of hidden. Covered by a regression test.
+
+### SDK tooling
+
+- TypeScript **5.9.3** across the generated client, `@anth-panel/panel`,
+  `@anth-panel/bun-plugin`, the Bun example and the `cargo anth` template.
+- The generated client and `apps/hello` component are refreshed, and the
+  `panel/backend` lock is regenerated.
+
+### Packages and images
+
+- crates.io and npm publish **0.8.2**, the first SDK package release since
+  `0.8.0`; it includes the `v0.8.1` store-in-base change.
+- Images are tagged `0.8.2-{core,base,demo,demo-sessions}`; the moving tags
+  point at this release.
+
+### Upgrade
+
+Back up `$state`, verify `SHA256SUMS`, replace the binaries/bundles, and restart.
+`0.7.x` state is read by `0.8.2`; a downgrade is not supported after a `0.8.x`
+binary writes the state.
+
 ## 0.8.1 — the Store in base
 
 `v0.8.1` is a distribution update. The engine and the panel binaries are

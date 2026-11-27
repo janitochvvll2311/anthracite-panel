@@ -1,6 +1,6 @@
 {
   "name": "@anth-panel/cli",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "type": "module",
   "description": "The Anthracite app developer CLI: cargo anth, for Bun",
   "license": "Apache-2.0",
