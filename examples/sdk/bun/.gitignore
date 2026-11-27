@@ -3,3 +3,5 @@
 /wasm
 *.key
 node_modules/
+/web/app.js
+/bun.lock
