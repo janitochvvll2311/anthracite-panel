@@ -240,7 +240,14 @@ mod tests {
             let bytes = fs::read(&bundle.path).expect("read bundle");
             let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
             let mut names: Vec<String> = (0..archive.len())
-                .map(|index| archive.by_index(index).expect("entry").name().to_string())
+                .map(|index| {
+                    archive
+                        .by_index(index)
+                        .expect("entry")
+                        .name()
+                        .map(|n| n.into_owned())
+                        .unwrap_or_default()
+                })
                 .collect();
             names.sort();
             assert!(names.contains(&"manifest.toml".to_string()), "{names:?}");

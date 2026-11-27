@@ -30,12 +30,28 @@ pub fn unpack(root: &Path, bundle: &[u8], max_total: u64) -> Result<(), Error> {
         let mut entry = archive
             .by_index(index)
             .map_err(|error| Error::invalid(format!("reading the bundle: {error}")))?;
+        let raw = entry
+            .name()
+            .map(|name| name.into_owned())
+            .unwrap_or_else(|_| "<unknown>".to_string());
+        let plain = raw.trim_end_matches('/');
+        if plain.contains('\\')
+            || plain.contains('\0')
+            || plain.split('/').any(|part| part.is_empty() || part == ".")
+        {
+            return Err(Error::invalid(format!(
+                "`{raw}` is not a plain path inside the bundle"
+            )));
+        }
+        if plain.split('/').any(|part| part == "..") {
+            return Err(Error::invalid(format!("`{raw}` escapes the bundle")));
+        }
         let name = entry
             .enclosed_name()
-            .ok_or_else(|| Error::invalid(format!("`{}` escapes the bundle", entry.name())))?;
+            .ok_or_else(|| Error::invalid(format!("`{raw}` escapes the bundle")))?;
         let mut relative = name
             .to_str()
-            .ok_or_else(|| Error::invalid(format!("`{}` is not UTF-8", entry.name())))?
+            .ok_or_else(|| Error::invalid(format!("`{raw}` is not UTF-8")))?
             .to_string();
         while relative.ends_with('/') {
             relative.pop();

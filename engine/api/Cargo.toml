@@ -27,4 +27,4 @@ ed25519-dalek = { version = "2.2", default-features = false, features = ["std", 
 libc = "0.2"
 tokio-tungstenite = "0.29"
 tower = { workspace = true }
-zip = { version = "2.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
