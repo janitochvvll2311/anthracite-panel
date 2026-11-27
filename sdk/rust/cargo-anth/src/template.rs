@@ -201,7 +201,7 @@ fn package_json(short: &str) -> String {
     "build": "bun build src/main.ts --outfile web/app.js --format esm --target browser"
   }},
   "devDependencies": {{
-    "typescript": "5.6.3"
+    "typescript": "5.9.3"
   }}
 }}
 "#
