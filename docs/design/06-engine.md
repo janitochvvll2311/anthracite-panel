@@ -389,11 +389,11 @@ state/                      the root, 0711 (traversable, not listable)
   audit.jsonl               append-only audit
 ```
 
-The root is `0711`; directories are `0700` (`shared` is `0770`; `run` and
-`broker` are `0711` so a service reaches its own entry without listing the
-others) and files are `0600`. The engine creates the tree on first boot,
-and refuses to start if one of these paths is a symlink. `shared/` is optional in
-a tree created before v0.6.0 until the next boot creates it.
+The root and the `data`, `run` and `broker` parents are `0711`; every other
+directory is `0700` (`shared` is `0770`) and files are `0600`. A service uid
+reaches its own entry without listing the others. The engine creates the tree on
+first boot, and refuses to start if one of these paths is a symlink. `shared/` is
+optional in a tree created before v0.6.0 until the next boot creates it.
 
 **Audit entries.** One JSON object per line, append-only, never rewritten:
 

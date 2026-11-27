@@ -7,8 +7,9 @@
 //!
 //! The supervisor owns the process group:
 //!
-//! - `state/run/` is `0700` and every socket lives there, so the directory is
-//!   the first access control;
+//! - `state/run/` is `0711` and each `run/<app-id>/` is `0700`, owned by its
+//!   service uid; the socket is `run/<app-id>/<pid>.sock` at `0600`, so the
+//!   directory is the first access control;
 //! - the child is started with `setsid`, cleared environment and no stdio, and
 //!   stopped with `SIGTERM`, five seconds, then `SIGKILL` on the group;
 //! - a crash after a healthy start is retried three times in sixty seconds;

@@ -89,11 +89,12 @@ $state/
   audit.jsonl             one JSON object per line, append-only
 ```
 
-Directories are `0700` (`{shared}` is `0770`) and the credentials and the audit
-log are `0600`, so a log shipper reads the audit as the engine user. The engine
-refuses a symlinked or wrong-mode state root rather than following it. The
-`apps/` tree is not a scratch area: editing it breaks the grant, and the engine
-reports the app as a problem.
+Directories are `0700` (`data/`, `run/` and `broker/` themselves are `0711`;
+`{shared}` is `0770`) and the credentials and the audit log are `0600`, so a log
+shipper reads the audit as the engine user. The engine refuses a symlinked or
+wrong-mode state root rather than following it. The `apps/` tree is not a
+scratch area: editing it breaks the grant, and the engine reports the app as a
+problem.
 
 ## Environment
 
