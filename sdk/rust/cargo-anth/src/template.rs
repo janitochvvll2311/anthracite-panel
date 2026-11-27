@@ -42,7 +42,7 @@ pub fn create(id: &str, lang: &str, dir: Option<&Path>) -> Result<PathBuf> {
     write(
         &target,
         ".gitignore",
-        "/target\n/dist\n/wasm\n*.key\nnode_modules/\n",
+        "/target\n/dist\n/wasm\n*.key\nnode_modules/\n/web/app.js\n/bun.lock\n",
     )?;
     write(&target, "README.md", &readme(id, short, &name, lang))?;
 
