@@ -375,18 +375,23 @@ Rules:
 Everything the engine owns lives under `state` (§6.7):
 
 ```
-state/
+state/                      the root, 0711 (traversable, not listable)
   apps/<app-id>/            bundle contents (verified before visible) + descriptor.toml (engine-written: enabled, alias, signer, tier, installed at)
   grants/<app-id>.toml      the frozen grant of each installed app
   composition.toml          the composition document (§8.1)
   credentials.txt           operator name and password, written once (§6.5)
   keys/<fingerprint>.toml   trusted third-party keys (§9.1)
+  data/<app-id>/            the app's `{data}` directory, 0700, owned by its service uid
   data/<app-id>/kv.json     the app's `anth:store/kv` namespace (host-written)
-  shared/                   files services opt into via `{shared}` (0700)
+  shared/                   files services opt into via `{shared}` (0770)
+  run/<app-id>/             the service's socket directory, 0700, owned by its service uid
+  broker/                   per-service broker sockets (0711)
   audit.jsonl               append-only audit
 ```
 
-Directories are `0700` and files `0600`. The engine creates the tree on first boot,
+The root is `0711`; directories are `0700` (`shared` is `0770`; `run` and
+`broker` are `0711` so a service reaches its own entry without listing the
+others) and files are `0600`. The engine creates the tree on first boot,
 and refuses to start if one of these paths is a symlink. `shared/` is optional in
 a tree created before v0.6.0 until the next boot creates it.
 
