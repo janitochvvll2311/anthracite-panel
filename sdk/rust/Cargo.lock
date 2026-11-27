@@ -19,7 +19,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "anth-api"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-auth",
  "anth-compose",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "anth-auth"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-contract",
  "serde",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "anth-bundle"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-error",
  "base64",
@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "anth-cli"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-contract",
  "cargo-anth",
@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "anth-client"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "percent-encoding",
  "serde",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "anth-compose"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-bundle",
  "anth-contract",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "anth-conformance"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-compose",
  "anth-contract",
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "anth-contract"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-bundle",
  "anth-error",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "anth-engine"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-api",
  "anth-auth",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "anth-error"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -152,14 +152,14 @@ dependencies = [
 
 [[package]]
 name = "anth-guest"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "wit-bindgen 0.63.0",
 ]
 
 [[package]]
 name = "anth-panel"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-api",
  "anth-auth",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "anth-runtime"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-contract",
  "humantime",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "anth-service"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-error",
  "base64",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "anth-signer"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-compose",
  "anth-contract",
@@ -338,7 +338,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cargo-anth"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "ed25519-dalek",

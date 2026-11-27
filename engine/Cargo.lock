@@ -19,7 +19,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "anth-api"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-auth",
  "anth-compose",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "anth-auth"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-contract",
  "serde",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "anth-bundle"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-error",
  "base64",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "anth-compose"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-bundle",
  "anth-contract",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "anth-contract"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-bundle",
  "anth-error",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "anth-engine"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-api",
  "anth-auth",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "anth-error"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "anth-runtime"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anth-contract",
  "humantime",

@@ -1,6 +1,6 @@
 {
   "name": "@anth-panel/wit",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "type": "module",
   "description": "The versioned Anthracite host WIT catalog",
   "license": "Apache-2.0",

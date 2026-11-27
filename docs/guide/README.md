@@ -53,7 +53,7 @@ UI → the [conformance kit](apps.md#the-conformance-kit).
 | [Security](security.md) | the authority model, secrets, what is and is not enforced |
 | [Troubleshooting](troubleshooting.md) | symptoms, causes, fixes |
 | [Glossary](glossary.md) | the vocabulary used everywhere else |
-| [Release notes](release-notes.md) | 0.8.0 changes, upgrade and limitations |
+| [Release notes](release-notes.md) | 0.8.2 changes, upgrade and limitations |
 | [Edge composition QA](edge-qa.md) | the manual matrix behind the release gate |
 
 ## Edge apps

@@ -132,10 +132,11 @@ docs/       design, feature reports and the guide
 
 ## Project status
 
-`v0.8.1` is the current release: the App SDK plus the store in the `base`
-variant. The engine and panel binaries are unchanged from `0.8.0`. A clean
-`base` install composes the eight signed system apps and the store, which seeds
-the Anthracite website as its default catalogue source. The store downloads
+`v0.8.2` is the current release: the App SDK plus the store in the `base`
+variant, with the dependency security fixes (`zip` 9.8.2, `wasmtime` 48.0.10)
+and the SDK tooling cleanup. A clean `base` install composes the eight signed
+system apps and the store, which seeds the Anthracite website as its default
+catalogue source. The store downloads
 every app bundle from the publisher's URL; the website only holds metadata and a
 signed catalogue. See [`docs/guide/release-notes.md`](docs/guide/release-notes.md)
 for the release history and known limitations.

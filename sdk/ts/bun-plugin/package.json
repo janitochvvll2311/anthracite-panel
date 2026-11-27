@@ -1,6 +1,6 @@
 {
   "name": "@anth-panel/bun-plugin",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Bun build plugin for the Anthracite virtual anth:client module",
   "license": "Apache-2.0",
