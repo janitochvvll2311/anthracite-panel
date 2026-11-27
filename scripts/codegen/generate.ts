@@ -362,7 +362,7 @@ export function generate(appDir: string, catalog: string): Generation {
         test: "bun test",
         typecheck: "tsc --noEmit",
       },
-      devDependencies: { typescript: "5.6.3" },
+      devDependencies: { typescript: "5.9.3" },
       publishConfig: { access: "public" },
     },
     null,
