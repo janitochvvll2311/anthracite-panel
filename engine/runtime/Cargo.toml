@@ -11,7 +11,7 @@ humantime = "2"
 libc = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
-wasmtime = { version = "42", features = ["component-model"] }
+wasmtime = { version = "48", features = ["component-model"] }
 
 [dev-dependencies]
 tokio = { workspace = true }

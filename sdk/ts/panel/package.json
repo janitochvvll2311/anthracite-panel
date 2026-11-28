@@ -1,6 +1,6 @@
 {
   "name": "@anth-panel/panel",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "type": "module",
   "description": "The Anthracite panel contract: slots, contribution order and asset URLs",
   "license": "Apache-2.0",
@@ -23,7 +23,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "typescript": "5.6.3"
+    "typescript": "5.9.3"
   },
   "publishConfig": {
     "access": "public"

@@ -1080,6 +1080,26 @@ mod tests {
     }
 
     #[test]
+    fn a_non_plain_path_is_refused() {
+        for (label, entry) in [
+            ("dot prefix", "./notes.wit"),
+            ("absolute", "/notes.wit"),
+            ("backslash", "wit\\notes.wit"),
+            ("drive prefix", "C:/notes.wit"),
+        ] {
+            let state = scratch(&format!("plain-{}", label.replace(' ', "-")));
+            let keyring = Keyring::new(&state);
+            let manifest = manifest(WASM);
+            let mut files = entries(&manifest, WIT, WASM);
+            files.push((entry.to_string(), WIT.as_bytes().to_vec()));
+            let error = extract(&zip(&files), &state, &options(false), &keyring)
+                .expect_err("non-plain path");
+            assert!(error.message().contains("plain path"), "{label}: {error}");
+            fs::remove_dir_all(&state).expect("cleanup");
+        }
+    }
+
+    #[test]
     fn a_native_import_is_allowed() {
         let state = scratch("native-import");
         let keyring = Keyring::new(&state);

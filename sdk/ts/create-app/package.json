@@ -1,6 +1,6 @@
 {
   "name": "@anth-panel/create-app",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "type": "module",
   "description": "Create a standalone Anthracite app with Bun",
   "license": "Apache-2.0",

@@ -10,13 +10,11 @@ and to the design where the reason matters.
 
 ## State
 
-`v0.8.1` is the current release: a distribution update over the `v0.8.0` App SDK.
-The engine and panel binaries are unchanged; the `base` variant now ships and
-composes `org.anthracite.store`, and the store seeds
-`https://anth-panel.com/store` as its default catalogue source on a clean install
-or an empty `sources.json`. The website serves the signed catalogue at
-`/store/index.json` and `/store/index.json.sig`; it lists the official apps and
-the third-party versions without uploading bundles.
+`v0.8.2` is the current release: the `v0.8.1` store-in-base change plus the
+dependency security fixes (`zip` 9.8.2, `wasmtime` 48.0.10) and the SDK tooling
+cleanup (TypeScript 5.9.3, refreshed generated client and `hello` component).
+The six public crates and the six `@anth-panel/*` packages are published at
+`0.8.2`.
 
 `v0.8.0` is the App SDK: `cargo anth` / `anth` for Rust and `bunx @anth-panel/cli`
 for Bun. The six public crates (`anth-error`, `anth-bundle`, `anth-guest`,

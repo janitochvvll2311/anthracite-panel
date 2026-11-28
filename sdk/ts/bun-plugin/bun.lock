@@ -6,7 +6,7 @@
       "name": "@anth-panel/bun-plugin",
       "devDependencies": {
         "@anth-panel/client": "file:../client",
-        "typescript": "5.6.3",
+        "typescript": "5.9.3",
       },
       "peerDependencies": {
         "@anth-panel/client": "^0.8.0",
@@ -14,8 +14,8 @@
     },
   },
   "packages": {
-    "@anth-panel/client": ["@anth-panel/client@file:../client", { "devDependencies": { "typescript": "5.6.3" } }],
+    "@anth-panel/client": ["@anth-panel/client@file:../client", { "devDependencies": { "typescript": "5.9.3" } }],
 
-    "typescript": ["typescript@5.6.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-hjcS1mhfuyi4WW8IWtjP7brDrG2cuDZukyrYrSauoXGNgx0S7zceP07adYkJycEr56BOUTNPzbInooiN3fn1qw=="],
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
   }
 }

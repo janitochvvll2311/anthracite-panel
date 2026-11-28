@@ -1,6 +1,6 @@
 {
   "name": "@anth-panel/bun-plugin",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "type": "module",
   "description": "Bun build plugin for the Anthracite virtual anth:client module",
   "license": "Apache-2.0",
@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@anth-panel/client": "file:../client",
-    "typescript": "5.6.3"
+    "typescript": "5.9.3"
   },
   "peerDependencies": {
     "@anth-panel/client": "^0.8.0"
