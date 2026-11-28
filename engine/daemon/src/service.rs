@@ -7,8 +7,9 @@
 //!
 //! The supervisor owns the process group:
 //!
-//! - `state/run/` is `0700` and every socket lives there, so the directory is
-//!   the first access control;
+//! - `state/run/` is `0711` and each `run/<app-id>/` is `0700`, owned by its
+//!   service uid; the socket is `run/<app-id>/<pid>.sock` at `0600`, so the
+//!   directory is the first access control;
 //! - the child is started with `setsid`, cleared environment and no stdio, and
 //!   stopped with `SIGTERM`, five seconds, then `SIGKILL` on the group;
 //! - a crash after a healthy start is retried three times in sixty seconds;
@@ -380,13 +381,27 @@ impl ServiceSupervisor {
 
     /// Removes sockets left by a previous engine process. A live service is
     /// always restarted by this boot, so a socket with no owner is stale.
+    ///
+    /// Sockets live one level down, in `run/<app-id>/`, because the per-app
+    /// directory belongs to its service uid; a socket at the top of `run/`
+    /// comes from a tree older than that layout.
     pub fn clear_stale(&self) {
         let Ok(entries) = std::fs::read_dir(&self.run_dir) else {
             return;
         };
         for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().ends_with(".sock") {
-                let _ = std::fs::remove_file(entry.path());
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                let Ok(files) = std::fs::read_dir(&path) else {
+                    continue;
+                };
+                for file in files.flatten() {
+                    if file.file_name().to_string_lossy().ends_with(".sock") {
+                        let _ = std::fs::remove_file(file.path());
+                    }
+                }
+            } else if entry.file_name().to_string_lossy().ends_with(".sock") {
+                let _ = std::fs::remove_file(path);
             }
         }
     }
@@ -1255,7 +1270,34 @@ impl anth_api::AppCaller for EngineCaller {
 
 #[cfg(test)]
 mod tests {
-    use super::deny_layer;
+    use super::{deny_layer, ServiceSupervisor};
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("anth-service-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    #[test]
+    fn clear_stale_removes_the_sockets_below_the_run_directory() {
+        let state = scratch("clear-stale");
+        let app = state.join("run").join("org.example.notes");
+        std::fs::create_dir_all(&app).expect("mkdir");
+        std::fs::write(app.join("1234.sock"), b"").expect("write");
+        std::fs::write(app.join("keep.txt"), b"").expect("write");
+        let supervisor = ServiceSupervisor::for_state(&state, std::time::Duration::from_secs(1));
+        supervisor.clear_stale();
+        assert!(!app.join("1234.sock").exists(), "the stale socket goes");
+        assert!(
+            app.join("keep.txt").exists(),
+            "the directory is not emptied"
+        );
+        assert!(app.is_dir(), "the app's socket directory stays");
+        let _ = std::fs::remove_dir_all(&state);
+    }
 
     #[test]
     fn a_prefixed_sandbox_error_keeps_its_layer() {
